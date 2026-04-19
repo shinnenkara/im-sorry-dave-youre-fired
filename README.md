@@ -1,134 +1,123 @@
-# im-sorry-dave-youre-fired
+# I'm Sorry Dave, You're Fired (Or Promoted? Let the AI decide)
 
-AI-assisted enterprise performance review CLI built with TypeScript, Node.js, AI SDK, MCP, and Ink.
+Let's be honest: nobody likes writing end-of-year enterprise performance reviews. You spend all year shipping code, then suddenly need to remember how many tickets you closed in March and write an essay about your "synergistic impact."
 
-## What it does
+This CLI tool fixes that. Plug in your data sources, paste your HR department's assessment questions, and add a few notable project titles. Then watch your API tokens turn into a beautifully cited, data-backed performance review.
 
-1. Loads review config (YAML/JSON).
-2. Uses a fast Gemini model to plan provider queries.
-3. Pulls evidence from task/comms/code providers in parallel.
-4. Uses a pro Gemini model to draft the final review with citations.
-5. Writes:
-   - `performance_review_<subject>_<timeframe>.md`
-   - `performance_review_<subject>_<timeframe>_references.md` (citations used by the review body)
-   - `performance_review_<subject>_<timeframe>_stats.md` (deterministic, numbers-only statistics)
+## The Magic ✨
 
-## Requirements
+Sure, we could let an LLM hallucinate the whole thing. Management might not notice. You might not notice. Nobody remembers Q2 anyway.
+
+But where is the fun in that? This project actually reviews your real work so the output is grounded in evidence and surprisingly useful.
+
+Run the interactive wizard and it generates:
+
+- `performance_review_<subject>_<timeframe>.md` (the masterpiece)
+- `performance_review_<subject>_<timeframe>_references.md` (the receipts and citations)
+- `performance_review_<subject>_<timeframe>_stats.md` (hard numbers like LoC and tickets closed)
+
+## Privacy First 🔒
+
+Your data is yours. API keys, tokens, and OAuth sessions are stored locally on your machine. The project is open source so you can verify exactly what happens with your HR-sensitive data.
+
+## The "Holy Trinity" of Data Providers
+
+To write a bulletproof review, the AI gathers context from three pillars of enterprise life:
+
+- **Code (The _Big Bang Theory_ realm / GitHub):** proves what you actually built and merged.
+- **Tasks (The _Office Space_ realm / ClickUp):** proves what business value you delivered.
+- **Comms (The _Silicon Valley_ realm / Slack - Beta):** proves that you (or your automated AI agent) actually talk to your team.
+
+---
+
+## Quick Start
+
+Requirements:
 
 - Node.js 20+
 - `gh` CLI installed and authenticated (`gh auth status`)
-- `GOOGLE_GENERATIVE_AI_API_KEY` in environment
-- MCP servers available for configured providers
+- `GOOGLE_GENERATIVE_AI_API_KEY` set in your environment
 
-## Install
+Install dependencies:
 
 ```bash
 npm install
 ```
 
-## Run
-
-```bash
-npm run dev -- --config configs/review.example.yaml
-```
-
-Quick run with interactive setup (no config file):
+Start interactive setup (no config file required):
 
 ```bash
 npm run dev --
 ```
 
-The interactive setup asks for:
-
-- display name
-- timeframe
-- review topics/questions
-- model (Gemini preset for now)
-- provider selection and provider-specific inputs
-
-Positional config path is also supported:
+Run with explicit config:
 
 ```bash
-npm run dev -- configs/review.example.yaml
+npm run dev -- --config configs/review.example.yaml
 ```
 
-Build + run:
+Build and run:
 
 ```bash
 npm run build
 npm start -- --config configs/review.example.yaml
 ```
 
-Dry run:
+## Models Supported 🧠
 
-```bash
-npm run dev -- --config configs/review.example.yaml --dry-run
-```
+- **Gemini:** available now (`GOOGLE_GENERATIVE_AI_API_KEY` required)
+- **Claude:** coming soon
+- **OpenAI:** coming soon
 
-## Slack setup automation
+## Provider Setup Guide
 
-Run a guided setup for Slack MCP:
+This part is dry but necessary so the AI can read your data.
+
+### 1) GitHub (Code)
+
+This project uses the official GitHub CLI to search PRs and commits.
+
+- Install `gh`: [GitHub CLI install guide](https://cli.github.com/)
+- Authenticate locally: `gh auth login`
+- For private repos, ensure token scopes include at least `repo` and `read:org`
+- Check current auth scopes: `gh auth status -t`
+
+### 2) ClickUp (Tasks)
+
+The ClickUp provider authenticates via OAuth in your browser.
+
+- Run the setup wizard and follow prompts
+- Make sure you are logged into your company ClickUp account in that browser
+
+### 3) Slack (Comms - Beta)
+
+Slack setup is more involved, so there is an assistant script:
 
 ```bash
 npm run setup:slack
 ```
 
-The assistant will:
+The setup assistant will:
 
-- verify Slack CLI is installed
-- verify/trigger `slack login`
-- create/reuse a fixed Slack agent project named `im-sorry-slack`
-- use a fixed non-interactive template (`slack-samples/bolt-js-starter-agent` / `claude-agent-sdk`)
-- enforce a manifest with MCP-ready OAuth redirect/scopes
-- run/open Slack app setup (`slack app install --environment local`, `slack app settings`) when needed
-- save `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET` into `.env`
-- validate Slack MCP connectivity with your current credentials
-- if needed, open your app's Slack MCP App Assistant page and retry automatically
+- verify Slack CLI is installed and you are logged in (`slack login`)
+- create a fixed Slack agent project on your machine (`im-sorry-slack`)
+- open Slack app setup (`slack app install --environment local`) when needed
+- save `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET` into your local `.env`
+- validate Slack MCP connectivity
 
-During first app install, Slack CLI may still ask one interactive prompt (`Create a new app`).
+Note: Slack MCP access depends on workspace policy. Admin approval may be required.
 
-Notes:
+## Config Files
 
-- Slack app OAuth must include redirect URL `http://localhost:3334/oauth/callback`.
-- This setup is usually one-time per machine/workspace unless credentials are rotated.
-- Slack MCP access and approvals depend on workspace policy/plan; many company workspaces are compatible, but admins may still need to approve app access.
+- Use `configs/review.example.yaml` as your starting template
+- See `configs/review.defaults.yaml` for optional defaults
 
-## Config
+## Contributing
 
-Use [`configs/review.example.yaml`](configs/review.example.yaml) as a template.
-Use [`configs/review.defaults.yaml`](configs/review.defaults.yaml) to see default values for optional fields.
+Want Jira support? GitLab? Microsoft Teams? Open a PR.
 
-Provider notes:
+Adding a new provider or model is a great first issue, and your coworkers will thank you.
 
-- `tasks` and `comms` providers use MCP stdio servers.
-- Each MCP adapter needs a `server` key referencing `mcpServers.<name>`.
-- If `mcpServers.clickup` or `mcpServers.slack` is omitted, the CLI falls back to official remote MCP endpoints via `npx -y mcp-remote`.
-- Tool names are adapter-specific (`tools.search` in the sample).
-- ClickUp MCP authentication is OAuth-only; do not configure ClickUp API keys in `mcpServers.clickup.env`.
-- Slack MCP authentication is OAuth-only; do not configure Slack bot/user tokens in this app config.
-- `subject` only needs a human-readable `displayName`; Slack/ClickUp identity is resolved via MCP at runtime.
-- `providers.tasks.debugOutputPath` and `providers.comms.debugOutputPath` can persist raw provider responses for debugging.
-- `providers.comms.expectedWorkspace`, `expectedUserId`, and `expectedUserEmail` can enforce Slack identity/workspace and fail fast on mismatched OAuth sessions.
-- `code` provider uses `gh search prs`.
-- Interactive setup currently supports `code=GitHub` and `tasks=ClickUp`; `comms=Slack` stays unavailable there for now.
-- Interactive setup runs readiness checks before provider selection:
-  - Gemini model: requires `GOOGLE_GENERATIVE_AI_API_KEY`
-  - GitHub: requires `gh auth status` to pass
-  - ClickUp: checks ClickUp MCP tool discovery
+## Disclaimer
 
-## GitHub permissions
-
-For private repos/org visibility, ensure `gh` token has at least:
-
-- `repo`
-- `read:org`
-
-Check current auth scopes with:
-
-```bash
-gh auth status -t
-```
-
-## Sensitive data
-
-Generated review output may include employee-sensitive data. Store and share outputs according to your HR/data retention policies.
+Review the AI output before sending it to your boss so you do not accidentally brag about a production outage.

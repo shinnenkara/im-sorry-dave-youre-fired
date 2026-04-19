@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "tsx src/cli/bootstrap.ts",
+    "clean:mcp-auth": "rm -rf ~/.mcp-auth",
     "setup:slack": "tsx src/cli/setupSlack.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/cli/bootstrap.js",
