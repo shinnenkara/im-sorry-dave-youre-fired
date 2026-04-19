@@ -15,7 +15,7 @@ Run the interactive wizard and it generates:
 - `performance_review_<subject>_<timeframe>.md` (the masterpiece)
 - `performance_review_<subject>_<timeframe>_references.md` (the receipts and citations)
 
-## Privacy First 🔒
+## Privacy First
 
 Your data is yours. No third-party SaaS servers, no shady org-wide GitHub app installations, and no leaking your proprietary code to a random web form. All API keys and OAuth sessions are stored strictly locally.
 
@@ -39,8 +39,8 @@ To write a bulletproof review, the AI gathers context from three pillars of ente
 Requirements:
 
 - Node.js 20+
-- `gh` CLI installed and authenticated (`gh auth status`)
-- `GOOGLE_GENERATIVE_AI_API_KEY` set in your environment
+- Set up your model first so the AI can generate your review: [Models Supported](#models-supported)
+- Set up your providers, based on what you want to include: [Providers](#providers)
 
 Install dependencies:
 
@@ -48,36 +48,45 @@ Install dependencies:
 npm install
 ```
 
-Start interactive setup (no config file required):
+Start interactive setup:
 
 ```bash
-npm run dev --
+npm run dev
 ```
 
-Run with explicit config:
-
-```bash
-npm run dev -- --config configs/review.example.yaml
-```
-
-Build and run:
+Or build and run:
 
 ```bash
 npm run build
-npm start -- --config configs/review.example.yaml
+npm start
 ```
 
-## Models Supported 🧠
+## Models Supported
 
-- **Gemini:** available now (`GOOGLE_GENERATIVE_AI_API_KEY` required)
-- **Claude:** coming soon
-- **OpenAI:** coming soon
+### Gemini
 
-## Provider Setup Guide
+#### Setup required
+
+- Set `GOOGLE_GENERATIVE_AI_API_KEY` in your environment.
+- Use a paid Google setup (not free tier); free projects currently route to flash-lite models only, which are out of scope for this tool.
+
+### Claude
+
+#### Setup required
+
+- Coming soon.
+
+### OpenAI
+
+#### Setup required
+
+- Coming soon.
+
+## Providers
 
 This part is dry but necessary so the AI can read your data.
 
-### 1) GitHub (Code)
+### GitHub (Code)
 
 This project uses the official GitHub CLI to search PRs and commits.
 
@@ -86,14 +95,14 @@ This project uses the official GitHub CLI to search PRs and commits.
 - For private repos, ensure token scopes include at least `repo` and `read:org`
 - Check current auth scopes: `gh auth status -t`
 
-### 2) ClickUp (Tasks)
+### ClickUp (Tasks)
 
 The ClickUp provider authenticates via OAuth in your browser.
 
 - Run the setup wizard and follow prompts
 - Make sure you are logged into your company ClickUp account in that browser
 
-### 3) Slack (Comms - Beta)
+### Slack (Comms - Beta)
 
 Slack setup is more involved, so there is an assistant script:
 
@@ -111,17 +120,12 @@ The setup assistant will:
 
 Note: Slack MCP access depends on workspace policy. Admin approval may be required.
 
-## Config Files
-
-- Use `configs/review.example.yaml` as your starting template
-- See `configs/review.defaults.yaml` for optional defaults
-
 ## Contributing
 
 Want Jira support? GitLab? Microsoft Teams? Open a PR.
 
-Adding a new provider or model is a great first issue, and your coworkers will thank you.
+Adding a new provider or model is a great first issue, and your coworkers may thank you.
 
-## Disclaimer
+## Disclaimer (!)
 
-Review the AI output before sending it to your boss so you do not accidentally brag about a production outage.
+Review the AI output before sending it to your boss so you do not accidentally brag about a production outage!
