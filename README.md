@@ -104,7 +104,16 @@ The ClickUp provider authenticates via OAuth in your browser.
 
 ### Slack (Comms - Beta)
 
-Slack setup is more involved, so there is an assistant script:
+Then keep setup simple:
+
+1. Install Slack CLI (manual step, same idea as GitHub CLI setup)
+2. Log in: `slack login`
+   - log into the Slack workspace you want this tool to read from
+   - Slack CLI will print a command/message to paste in Slack chat
+   - you can paste it into any chat, including a DM with yourself
+   - Slack will return a code; paste that code back into the CLI to complete login
+   - if install/login errors happen, use official documentation as a reference: [Slack agent quickstart](https://docs.slack.dev/ai/agent-quickstart)
+3. Run the setup assistant:
 
 ```bash
 npm run setup:slack
@@ -112,13 +121,13 @@ npm run setup:slack
 
 The setup assistant will:
 
-- verify Slack CLI is installed and you are logged in (`slack login`)
+- verify Slack CLI is installed and your login is active
 - create a fixed Slack agent project on your machine (`im-sorry-slack`)
 - open Slack app setup (`slack app install --environment local`) when needed
 - save `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET` into your local `.env`
 - validate Slack MCP connectivity
 
-Note: Slack MCP access depends on workspace policy. Admin approval may be required.
+Note: Slack MCP is available on Slack Pro and higher plans. Access may also depend on workspace policy, and admin approval may be required.
 
 ## Contributing
 

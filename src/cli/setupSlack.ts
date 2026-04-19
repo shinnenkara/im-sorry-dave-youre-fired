@@ -99,10 +99,7 @@ async function ensureSlackCliInstalled(): Promise<void> {
   } catch (error) {
     const message = extractErrorMessage(error);
     if (message.includes("command not found") || message.includes("ENOENT")) {
-      output.write("\nSlack CLI is not installed.\n");
-      output.write("Install with:\n");
-      output.write("  curl -fsSL https://downloads.slack-edge.com/slack-cli/install.sh | bash\n\n");
-      throw new Error("Missing Slack CLI.");
+      throw new Error("No Slack CLI found. Install Slack CLI first, then rerun this setup.");
     }
     throw error;
   }
@@ -156,28 +153,20 @@ async function upsertEnvFile(updates: Record<string, string>): Promise<void> {
   await writeFile(envPath, next, "utf8");
 }
 
-async function ensureSlackLogin(rl: ReturnType<typeof createInterface>): Promise<void> {
-  try {
-    const result = await execa("slack", ["auth", "list"]);
-    const normalized = `${result.stdout}\n${result.stderr}`.toLowerCase();
-    if (normalized.includes("no authorized") || normalized.includes("not logged in")) {
-      output.write("\nSlack CLI is installed but not logged in.\n");
-      const answer = (await rl.question("Run `slack login` now? [Y/n]: ")).trim().toLowerCase();
-      if (answer === "n") {
-        throw new Error("Slack login is required.");
-      }
-      await execa("slack", ["login"], { stdio: "inherit" });
-    } else {
-      output.write("Slack CLI login detected.\n");
-    }
-  } catch {
-    output.write("\nCould not verify Slack login automatically.\n");
-    const answer = (await rl.question("Run `slack login` now? [Y/n]: ")).trim().toLowerCase();
-    if (answer === "n") {
-      throw new Error("Slack login is required.");
-    }
-    await execa("slack", ["login"], { stdio: "inherit" });
+async function ensureSlackLogin(): Promise<void> {
+  const result = await execa("slack", ["auth", "list"], { reject: false });
+  const normalized = `${result.stdout}\n${result.stderr}`.toLowerCase();
+  const hasNoActiveLogin =
+    result.exitCode !== 0 ||
+    normalized.includes("no authorized") ||
+    normalized.includes("not logged in") ||
+    normalized.includes("not authenticated");
+
+  if (hasNoActiveLogin) {
+    throw new Error("No active Slack login. Run `slack login` first, then rerun this setup.");
   }
+
+  output.write("Slack CLI login detected.\n");
 }
 
 async function ensureSlackAgentProject(): Promise<void> {
@@ -475,7 +464,7 @@ async function main(): Promise<void> {
     output.write("Slack setup assistant\n");
     output.write("=====================\n");
     await ensureSlackCliInstalled();
-    await ensureSlackLogin(rl);
+    await ensureSlackLogin();
     await ensureSlackAgentProject();
     await enforceSlackAgentManifest();
     await ensureSlackAppInstalled(rl);
