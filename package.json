@@ -1,0 +1,51 @@
+{
+  "name": "im-sorry-dave-youre-fired",
+  "version": "1.0.0",
+  "description": "AI-assisted enterprise performance review CLI",
+  "main": "dist/cli/bootstrap.js",
+  "bin": {
+    "review": "dist/cli/bootstrap.js"
+  },
+  "scripts": {
+    "dev": "tsx src/cli/bootstrap.ts",
+    "setup:slack": "tsx src/cli/setupSlack.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/cli/bootstrap.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shinnenkara/im-sorry-dave-youre-fired.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/shinnenkara/im-sorry-dave-youre-fired/issues"
+  },
+  "homepage": "https://github.com/shinnenkara/im-sorry-dave-youre-fired#readme",
+  "dependencies": {
+    "@ai-sdk/google": "^3.0.64",
+    "@inquirer/prompts": "^8.4.2",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ai": "^6.0.168",
+    "commander": "^14.0.3",
+    "dotenv": "^17.4.2",
+    "execa": "^9.6.1",
+    "ink": "^7.0.1",
+    "ink-spinner": "^5.0.0",
+    "react": "^19.2.5",
+    "yaml": "^2.8.3",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/react": "^19.2.14",
+    "ink-testing-library": "^4.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.4"
+  }
+}

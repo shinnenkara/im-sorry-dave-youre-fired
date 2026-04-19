@@ -1,0 +1,89 @@
+appName: im-sorry-dave-youre-fired
+# timeframe: last_3_months | last_6_months | last_12_months | { preset: custom, start, end } | "any legacy label"
+timeframe: last_3_months
+subject:
+  displayName: John Doe
+  githubUsername: johndoe
+reviewQuestions:
+  - What were the major architectural contributions this quarter?
+  - How effectively did this person collaborate with other teams?
+  - What impact did code reviews and mentoring have?
+outDir: ./out
+maxContextChars: 120000
+models:
+  fast: gemini-2.5-flash-lite
+  pro: gemini-2.5-flash-lite
+mcpServers:
+  clickup:
+    command: npx
+    args: ["-y", "mcp-remote", "https://mcp.clickup.com/mcp"]
+    # ClickUp MCP supports OAuth login via the MCP client/browser flow.
+  slack:
+    command: npx
+    args:
+      - "-y"
+      - "mcp-remote"
+      - "https://mcp.slack.com/mcp"
+      - "3334"
+      - "--host"
+      - "localhost"
+      - "--static-oauth-client-info"
+      - '{"client_id":"${SLACK_CLIENT_ID}","client_secret":"${SLACK_CLIENT_SECRET}"}'
+    env:
+      SLACK_CLIENT_ID: ${SLACK_CLIENT_ID}
+      SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}
+    # Slack MCP requires a registered Slack app client_id/client_secret in this flow.
+    # Add this redirect URL in your Slack app OAuth settings:
+    #   http://localhost:3334/oauth/callback
+    # See: https://docs.slack.dev/ai/slack-mcp-server/#slack-mcp
+providers:
+  tasks:
+    enabled: true
+    type: clickup-mcp
+    server: clickup
+    # Optional explicit assignee filter accepted by the ClickUp MCP search tool.
+    # user: john.doe@company.com
+    # Optional debug artifact with all raw/normalized task results.
+    # debugOutputPath: ./out/clickup_tasks_john-doe_last-3-months.json
+    # Optional enrichment controls for task descriptions/comments.
+    # enrichment:
+    #   enabled: true
+    #   maxTasks: 30
+    #   concurrency: 8
+    #   maxCommentsPerTask: 3
+    #   scoring:
+    #     doneBoost: 2
+    #     closedBoost: 2
+    #     multiAssigneeBoost: 1.5
+    #     nonBugBoost: 1
+    #     recencyBoost: 2
+    #     recencyWindowDays: 45
+    #     keywordWeights:
+    #       architecture: 8
+    #       migration: 7
+    #       refactor: 6
+    #       design: 5
+    #       platform: 5
+    #       performance: 5
+    #       integration: 4
+    #       api: 4
+    tools:
+      search: clickup_search
+  comms:
+    enabled: true
+    type: slack-mcp
+    server: slack
+    # Optional debug artifact with all raw/normalized Slack message results.
+    # debugOutputPath: ./out/slack_messages_john-doe_last-3-months.json
+    # Optional guardrails to fail fast if OAuth is connected
+    # to the wrong Slack workspace/account.
+    # expectedWorkspace: acme
+    # expectedUserId: U0123456789
+    # expectedUserEmail: john.doe@acme.com
+    tools:
+      search: search_messages
+  code:
+    enabled: true
+    type: github-cli
+    repo: acme/web-platform
+    prLimit: 100

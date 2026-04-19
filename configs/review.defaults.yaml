@@ -1,0 +1,71 @@
+appName: im-sorry-dave-youre-fired
+timeframe: last_3_months
+subject:
+  displayName: John Doe
+  # githubUsername: johndoe
+reviewQuestions:
+  - What were the major architectural contributions this quarter?
+
+# Default: out
+outDir: out
+# Default: 120000
+maxContextChars: 120000
+models:
+  # Default: gemini-2.5-flash
+  fast: gemini-2.5-flash
+  # Default: gemini-2.5-pro
+  pro: gemini-2.5-pro
+
+# Optional: explicit MCP server config.
+mcpServers:
+  clickup:
+    command: npx
+    args: ["-y", "mcp-remote", "https://mcp.clickup.com/mcp"]
+  slack:
+    command: npx
+    args: ["-y", "mcp-remote", "https://mcp.slack.com/mcp"]
+
+providers:
+  tasks:
+    # Default: true
+    enabled: true
+    type: clickup-mcp
+    server: clickup
+    # user: john.doe@company.com
+    # debugOutputPath: ./out/clickup_tasks_john-doe_last-3-months.json
+    # enrichment:
+    #   enabled: true
+    #   maxTasks: 30
+    #   concurrency: 8
+    #   maxCommentsPerTask: 3
+    #   scoring:
+    #     doneBoost: 2
+    #     closedBoost: 2
+    #     multiAssigneeBoost: 1.5
+    #     nonBugBoost: 1
+    #     recencyBoost: 2
+    #     recencyWindowDays: 45
+    tools:
+      search: clickup_search
+
+  comms:
+    # Default: true
+    enabled: true
+    type: slack-mcp
+    server: slack
+    # debugOutputPath: ./out/slack_messages_john-doe_last-3-months.json
+    # expectedWorkspace: acme
+    # expectedUserId: U0123456789
+    # expectedUserEmail: john.doe@acme.com
+    tools:
+      search: search_messages
+
+  code:
+    # Default: true
+    enabled: true
+    type: github-cli
+    # repo can be single "owner/repo" or a list.
+    repo: acme/web-platform
+    # debugOutputPath: ./out/github_activity_john-doe_last-3-months.json
+    # Default: 100
+    prLimit: 100
