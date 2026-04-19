@@ -1,4 +1,4 @@
-# I'm Sorry Dave, You're Fired (Or Promoted? Let the AI decide)
+# I'm Sorry Dave, You're Fired (Or Promoted?)
 
 Let's be honest: nobody likes writing end-of-year enterprise performance reviews. You spend all year shipping code, then suddenly need to remember how many tickets you closed in March and write an essay about your "synergistic impact."
 
@@ -14,19 +14,23 @@ Run the interactive wizard and it generates:
 
 - `performance_review_<subject>_<timeframe>.md` (the masterpiece)
 - `performance_review_<subject>_<timeframe>_references.md` (the receipts and citations)
-- `performance_review_<subject>_<timeframe>_stats.md` (hard numbers like LoC and tickets closed)
 
 ## Privacy First 🔒
 
-Your data is yours. API keys, tokens, and OAuth sessions are stored locally on your machine. The project is open source so you can verify exactly what happens with your HR-sensitive data.
+Your data is yours. No third-party SaaS servers, no shady org-wide GitHub app installations, and no leaking your proprietary code to a random web form. All API keys and OAuth sessions are stored strictly locally.
+
+> _The Honest Disclaimer: Yes, the script does send your gathered data to your chosen AI model (Gemini/OpenAI) to write the review. But let's be real—you've been pasting your company's proprietary code into ChatGPT since 2022 to fix your regex, so that ship has already sailed. At least this time, it might get you a raise._
 
 ## The "Holy Trinity" of Data Providers
 
 To write a bulletproof review, the AI gathers context from three pillars of enterprise life:
 
-- **Code (The _Big Bang Theory_ realm / GitHub):** proves what you actually built and merged.
-- **Tasks (The _Office Space_ realm / ClickUp):** proves what business value you delivered.
-- **Comms (The _Silicon Valley_ realm / Slack - Beta):** proves that you (or your automated AI agent) actually talk to your team.
+- **Code (GitHub):** proves what you actually built and merged.
+> I'm not crazy, my commit history had me tested.
+- **Tasks (ClickUp):** proves what business value you delivered.
+> Did you get the memo about the new Jira workflow?
+- **Comms (Slack - Beta):** proves that you (or your automated AI agent) actually talk to your team.
+> We need to talk about the middle-out compression of your daily standup updates.
 
 ---
 
