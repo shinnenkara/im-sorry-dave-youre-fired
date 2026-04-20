@@ -18,7 +18,8 @@ const slackMcpUrl = "https://mcp.slack.com/mcp";
 const slackMcpDocsUrl = "https://docs.slack.dev/ai/slack-mcp-server/developing";
 const slackAppsDashboardUrl = "https://api.slack.com/apps";
 const localCallbackUrl = "http://localhost:3334/oauth/callback";
-const localTemplatePath = resolve("templates", "im-sorry-slack-template");
+const localTemplatePath = resolve("apps", "templates", "im-sorry-slack-template");
+const localAppPath = resolve("apps", "im-sorry-slack");
 
 function extractErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -171,9 +172,9 @@ function printSetupGuide(): void {
   output.write("1) Authenticate Slack CLI:\n");
   output.write("   slack login\n\n");
   output.write("2) Create a new app from this repository template:\n");
-  output.write(`   slack create im-sorry-slack -t "${localTemplatePath}"\n\n`);
+  output.write(`   slack create "${localAppPath}" -t "${localTemplatePath}"\n\n`);
   output.write("3) Install/link the app in that generated project:\n");
-  output.write("   cd im-sorry-slack\n");
+  output.write(`   cd "${localAppPath}"\n`);
   output.write("   slack app install --environment local\n\n");
   output.write("4) Open app settings:\n");
   output.write("   slack app settings\n");

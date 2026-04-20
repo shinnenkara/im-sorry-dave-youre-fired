@@ -117,20 +117,20 @@ Use official Slack CLI steps first, then run this repo's verifier.
 slack login
 ```
 
-2. From this repository root, create your Slack app from the in-repo template
+2. From this repository root, create your Slack app under `apps/` from the in-repo template
 
 ```bash
-slack create im-sorry-slack -t "$(pwd)/templates/im-sorry-slack-template"
+slack create "$(pwd)/apps/im-sorry-slack" -t "$(pwd)/apps/templates/im-sorry-slack-template"
 ```
 
 3. Install/link the app in the generated project
 
 ```bash
-cd im-sorry-slack
+cd apps/im-sorry-slack
 slack app install --environment local
 ```
 
-4. Open app settings (from `im-sorry-slack` directory):
+4. Open app settings (from `apps/im-sorry-slack` directory):
 
 ```bash
 slack app settings

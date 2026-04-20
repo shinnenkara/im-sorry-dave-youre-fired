@@ -47,7 +47,7 @@ async function main(): Promise<void> {
 
   output.write("\nSlack cleanup checklist:\n");
   output.write("- Uninstall/delete your test app in https://api.slack.com/apps\n");
-  output.write("- Remove old Slack app folders created via `slack create` if no longer needed\n");
+  output.write("- Remove old Slack app folders under ./apps created via `slack create` if no longer needed\n");
   output.write("- Re-run `slack login` and setup flow when switching workspaces\n");
   if (!shouldPruneEnv) {
     output.write("- Optional: re-run with `npm run clean:slack -- --prune-env` to remove Slack keys from .env\n");

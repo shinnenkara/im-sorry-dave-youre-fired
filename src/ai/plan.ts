@@ -6,7 +6,7 @@ import { resolveLanguageModel } from "./languageModel.js";
 
 const evidenceStrategySchema = z.enum(["aggregate", "mixed", "narrative"]);
 
-const queryPlanSchema = z.object({
+const queryPlanResponseSchema = z.object({
   providerQueries: z.object({
     tasks: z.array(z.string()).default([]),
     comms: z.array(z.string()).default([]),
@@ -15,12 +15,25 @@ const queryPlanSchema = z.object({
   questionStrategies: z
     .array(
       z.object({
-        questionIndex: z.number().int().min(1),
+        // Keep the provider-facing JSON schema broadly compatible across model APIs.
+        questionIndex: z.number(),
         evidenceStrategy: evidenceStrategySchema,
       }),
     )
     .default([]),
   rationale: z.string().optional(),
+});
+
+const queryPlanSchema = queryPlanResponseSchema.superRefine((plan, ctx) => {
+  for (const [index, strategy] of plan.questionStrategies.entries()) {
+    if (!Number.isInteger(strategy.questionIndex) || strategy.questionIndex < 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "questionIndex must be an integer greater than or equal to 1",
+        path: ["questionStrategies", index, "questionIndex"],
+      });
+    }
+  }
 });
 
 export type QueryPlan = z.infer<typeof queryPlanSchema>;
@@ -39,7 +52,7 @@ export async function generateReviewQueryPlan(config: ReviewConfig, modelId: str
   const { object } = await generateObject({
     model: resolveLanguageModel(modelId),
     maxRetries: 0,
-    schema: queryPlanSchema,
+    schema: queryPlanResponseSchema,
     prompt: [
       "You are a planning assistant for enterprise performance review data collection.",
       "Generate concise search queries for three providers: tasks, comms, code.",
@@ -54,5 +67,5 @@ export async function generateReviewQueryPlan(config: ReviewConfig, modelId: str
     ].join("\n"),
   });
 
-  return object;
+  return queryPlanSchema.parse(object);
 }
