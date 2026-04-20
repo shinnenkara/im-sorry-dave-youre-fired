@@ -58,7 +58,7 @@ providers:
     expect(config.models.fast).toBe("gemini-2.5-flash");
     expect(config.models.pro).toBe("gemini-2.5-pro");
     expect(config.providers.code?.enabled).toBe(true);
-    expect(config.providers.code?.prLimit).toBe(100);
+    expect(config.providers.code?.prLimit).toBe(500);
   });
 
   test("accepts github repo arrays and debug output path", async () => {
@@ -76,6 +76,7 @@ providers:
   code:
     enabled: true
     type: github-cli
+    org: acme
     repo:
       - acme/app
       - acme/api
@@ -86,6 +87,7 @@ providers:
     );
 
     const config = await loadReviewConfig(configPath, { referenceDate: new Date("2026-06-01T00:00:00.000Z") });
+    expect(config.providers.code?.org).toBe("acme");
     expect(config.providers.code?.repo).toEqual(["acme/app", "acme/api"]);
     expect(config.providers.code?.debugOutputPath).toBe("./out/github-debug.json");
   });
@@ -187,10 +189,12 @@ providers:
         subject: {
           displayName: "Jane ${LAST_NAME}",
         },
+        notableProjects: " Apollo migration ",
         reviewQuestions: ["What did Jane deliver?"],
         providers: {
           code: {
             type: "github-cli",
+            org: "acme",
             repo: ["acme/app"],
           },
         },
@@ -199,9 +203,32 @@ providers:
     );
 
     expect(config.subject.displayName).toBe("Jane ${LAST_NAME}");
+    expect(config.notableProjects).toBe("Apollo migration");
     expect(config.timeframe.slug).toBe("last-6-months");
-    expect(config.providers.code?.prLimit).toBe(100);
+    expect(config.providers.code?.org).toBe("acme");
+    expect(config.providers.code?.prLimit).toBe(500);
     expect(config.models.pro).toBe("gemini-2.5-pro");
+  });
+
+  test("normalizes blank notable projects to undefined", () => {
+    const config = parseReviewConfigFromUnknown(
+      {
+        timeframe: "last_6_months",
+        subject: {
+          displayName: "Jane Doe",
+        },
+        notableProjects: "   ",
+        reviewQuestions: ["What did Jane deliver?"],
+        providers: {
+          code: {
+            type: "github-cli",
+          },
+        },
+      },
+      { interpolateEnv: false, referenceDate: new Date("2026-06-01T00:00:00.000Z") },
+    );
+
+    expect(config.notableProjects).toBeUndefined();
   });
 
   test("requires at least one provider for parsed object configs", () => {

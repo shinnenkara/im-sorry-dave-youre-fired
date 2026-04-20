@@ -41,8 +41,11 @@ const reviewSchema: z.ZodType<ParsedReviewConfig> = z.object({
   timeframe: timeframeYamlSchema,
   subject: z.object({
     displayName: z.string().min(1),
+    email: z.string().email().optional(),
+    slackUserId: z.string().regex(/^[UW][A-Z0-9]{6,}$/i).optional(),
     githubUsername: z.string().optional(),
   }),
+  notableProjects: z.string().optional(),
   reviewQuestions: z.array(z.string().min(1)).min(1),
   outDir: z.string().min(1).default(DEFAULT_REVIEW_CONFIG.outDir),
   maxContextChars: z.number().int().positive().default(DEFAULT_REVIEW_CONFIG.maxContextChars),
@@ -117,8 +120,10 @@ export function parseReviewConfigFromUnknown(
   const shouldInterpolateEnv = options?.interpolateEnv ?? true;
   const candidate = shouldInterpolateEnv ? interpolateEnvVars(input) : input;
   const parsed = reviewSchema.parse(candidate);
+  const notableProjects = parsed.notableProjects?.trim();
   return {
     ...parsed,
+    notableProjects: notableProjects && notableProjects.length > 0 ? notableProjects : undefined,
     timeframe: resolveTimeframeInput(parsed.timeframe, options?.referenceDate ?? new Date()),
   };
 }

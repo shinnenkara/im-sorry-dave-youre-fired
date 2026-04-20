@@ -63,6 +63,7 @@ interface GhPrDetailResult extends GhPrSearchResult {
 }
 
 export interface GitHubCliProviderOptions {
+  org?: string;
   repo?: string | string[];
   debugOutputPath?: string;
   prLimit: number;
@@ -72,7 +73,7 @@ type DebugKind = "mergedPRs" | "codeReviews";
 
 interface GhSearchDebugEntry {
   query: string;
-  repoFilter?: string;
+  scopeQualifiers: string[];
   limit: number;
   rawResultCount: number;
   rawRows: GhPrSearchResult[];
@@ -85,6 +86,11 @@ interface GhDebugSnapshot {
   deduplicatedRowCount: number;
   searches: GhSearchDebugEntry[];
   rows: GhPrDetailResult[];
+  orgQualifier?: string;
+  preferredRepos: string[];
+  rankingNote?: string;
+  preferredRepoRowCount?: number;
+  nonPreferredRepoRowCount?: number;
   appliedDateQualifier?: string;
   postFilterDroppedCount?: number;
   fallbackApplied?: boolean;
@@ -93,6 +99,13 @@ interface GhDebugSnapshot {
 interface TimeframeWindow {
   startDate: string;
   endDate: string;
+}
+
+interface SearchRunResult {
+  deduplicatedRows: GhPrSearchResult[];
+  debugEntries: GhSearchDebugEntry[];
+  preferredRepoRowCount: number;
+  nonPreferredRepoRowCount: number;
 }
 
 function sanitizePlannerQueryBit(raw: string): string | undefined {
@@ -181,21 +194,103 @@ function buildKeywordQueryBits(plannerQueries: string[], displayName: string): s
   return keywords.length > 0 ? [keywords.join(" ")] : [];
 }
 
-function normalizeRepoFilters(repo?: string | string[]): string[] {
+function normalizePreferredRepos(repo?: string | string[]): string[] {
   if (!repo) {
     return [];
   }
   const repos = (Array.isArray(repo) ? repo : [repo]).map((entry) => entry.trim()).filter(Boolean);
-  const filters = repos.map((entry) => {
+  const preferredRepos = repos.map((entry) => {
     if (entry.startsWith("repo:")) {
-      return entry;
+      return entry.slice("repo:".length).trim().toLowerCase();
     }
     if (entry.includes("/")) {
-      return `repo:${entry}`;
+      return entry.toLowerCase();
     }
-    throw new Error(`Invalid GitHub repo "${entry}". Use "owner/repo" (for example "carbmee/carbmee").`);
+    throw new Error(
+      `Invalid preferred GitHub repo "${entry}". Use "owner/repo" (for example "carbmee/carbmee").`,
+    );
   });
-  return [...new Set(filters)];
+  return [...new Set(preferredRepos)];
+}
+
+function normalizeOrgQualifier(org?: string): string | undefined {
+  if (!org) {
+    return undefined;
+  }
+  const normalized = org.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized.startsWith("org:")) {
+    const orgName = normalized.slice("org:".length).trim();
+    if (/^[^\s/]+$/u.test(orgName)) {
+      return `org:${orgName}`;
+    }
+  } else if (/^[^\s/]+$/u.test(normalized)) {
+    return `org:${normalized}`;
+  }
+  throw new Error(`Invalid GitHub organization "${org}". Use an org slug like "carbmee".`);
+}
+
+export function rankRowsByPreferredRepos(
+  rows: GhPrSearchResult[],
+  preferredRepoSet: Set<string>,
+): { rows: GhPrSearchResult[]; preferredCount: number; nonPreferredCount: number } {
+  if (rows.length === 0 || preferredRepoSet.size === 0) {
+    return {
+      rows,
+      preferredCount: 0,
+      nonPreferredCount: rows.length,
+    };
+  }
+  const decorated = rows.map((row, index) => {
+    const repo = row.repository?.nameWithOwner?.toLowerCase();
+    const isPreferred = repo ? preferredRepoSet.has(repo) : false;
+    return { row, index, isPreferred };
+  });
+  decorated.sort((a, b) => {
+    if (a.isPreferred === b.isPreferred) {
+      return a.index - b.index;
+    }
+    return a.isPreferred ? -1 : 1;
+  });
+  const preferredCount = decorated.filter((entry) => entry.isPreferred).length;
+  return {
+    rows: decorated.map((entry) => entry.row),
+    preferredCount,
+    nonPreferredCount: decorated.length - preferredCount,
+  };
+}
+
+function toSearchRowKey(row: GhPrSearchResult): string {
+  return row.url || `${row.repository?.nameWithOwner ?? "unknown"}#${row.number}`;
+}
+
+function mergeSearchRuns(
+  preferredRepoSet: Set<string>,
+  prLimit: number,
+  ...runs: Array<SearchRunResult | undefined>
+): SearchRunResult {
+  const debugEntries = runs.flatMap((run) => run?.debugEntries ?? []);
+  const mergedByKey = new Map<string, GhPrSearchResult>();
+  for (const run of runs) {
+    if (!run) {
+      continue;
+    }
+    for (const row of run.deduplicatedRows) {
+      const key = toSearchRowKey(row);
+      if (!mergedByKey.has(key)) {
+        mergedByKey.set(key, row);
+      }
+    }
+  }
+  const ranked = rankRowsByPreferredRepos([...mergedByKey.values()], preferredRepoSet);
+  return {
+    deduplicatedRows: ranked.rows.slice(0, prLimit),
+    preferredRepoRowCount: ranked.preferredCount,
+    nonPreferredRepoRowCount: ranked.nonPreferredCount,
+    debugEntries,
+  };
 }
 
 function parseTimeframeWindow(timeframe: string): TimeframeWindow | undefined {
@@ -347,13 +442,17 @@ function toEvidence(prefix: string, source: "code", rows: GhPrDetailResult[]): N
 
 export class GitHubCliAdapter implements ICodeProvider {
   public readonly name = "github-cli";
-  private readonly repoFilters: string[];
+  private readonly orgQualifier?: string;
+  private readonly preferredRepos: string[];
+  private readonly preferredRepoSet: Set<string>;
   private readonly debugOutputPath?: string;
   private readonly prLimit: number;
   private readonly debugSnapshots: Partial<Record<DebugKind, GhDebugSnapshot>> = {};
 
   public constructor(options: GitHubCliProviderOptions) {
-    this.repoFilters = normalizeRepoFilters(options.repo);
+    this.orgQualifier = normalizeOrgQualifier(options.org);
+    this.preferredRepos = normalizePreferredRepos(options.repo);
+    this.preferredRepoSet = new Set(this.preferredRepos);
     this.debugOutputPath = options.debugOutputPath;
     this.prLimit = options.prLimit;
   }
@@ -366,7 +465,8 @@ export class GitHubCliAdapter implements ICodeProvider {
     const payload = {
       provider: this.name,
       generatedAt: new Date().toISOString(),
-      repoFilters: this.repoFilters,
+      orgQualifier: this.orgQualifier,
+      preferredRepos: this.preferredRepos,
       prLimit: this.prLimit,
       mergedPRs: this.debugSnapshots.mergedPRs,
       codeReviews: this.debugSnapshots.codeReviews,
@@ -374,47 +474,41 @@ export class GitHubCliAdapter implements ICodeProvider {
     await writeFile(this.debugOutputPath, JSON.stringify(payload, null, 2), "utf8");
   }
 
-  private async runSearchAcrossRepoFilters(baseQueryBits: string[]): Promise<{
-    deduplicatedRows: GhPrSearchResult[];
-    debugEntries: GhSearchDebugEntry[];
-  }> {
-    const debugEntries: GhSearchDebugEntry[] = [];
-    const repoFilters = this.repoFilters.length > 0 ? this.repoFilters : [undefined];
-    const allRows: GhPrSearchResult[] = [];
-    for (const repoFilter of repoFilters) {
-      const queryTerms = [...baseQueryBits, ...(repoFilter ? [repoFilter] : [])].map((bit) => bit.trim()).filter(Boolean);
-      const query = queryTerms.join(" ");
-      const { parsed } = await runGhJson<GhPrSearchResult[]>([
-        "search",
-        "prs",
-        ...queryTerms,
-        "--limit",
-        String(this.prLimit),
-        "--json",
-        "number,title,url,state,createdAt,updatedAt,closedAt,repository",
-      ]);
-      debugEntries.push({
-        query,
-        repoFilter,
-        limit: this.prLimit,
-        rawResultCount: parsed.length,
-        rawRows: parsed,
-      });
-      for (const row of parsed) {
-        allRows.push(row);
-      }
-    }
+  private async runSearch(baseQueryBits: string[]): Promise<SearchRunResult> {
+    const scopeQualifiers = this.orgQualifier ? [this.orgQualifier] : [];
+    const queryTerms = [...baseQueryBits, ...scopeQualifiers].map((bit) => bit.trim()).filter(Boolean);
+    const query = queryTerms.join(" ");
+    const { parsed } = await runGhJson<GhPrSearchResult[]>([
+      "search",
+      "prs",
+      ...queryTerms,
+      "--limit",
+      String(this.prLimit),
+      "--json",
+      "number,title,url,state,createdAt,updatedAt,closedAt,repository",
+    ]);
 
     const deduplicated = new Map<string, GhPrSearchResult>();
-    for (const row of allRows) {
-      const key = row.url || `${row.repository?.nameWithOwner ?? "unknown"}#${row.number}`;
+    for (const row of parsed) {
+      const key = toSearchRowKey(row);
       if (!deduplicated.has(key)) {
         deduplicated.set(key, row);
       }
     }
+    const rankedRows = rankRowsByPreferredRepos([...deduplicated.values()], this.preferredRepoSet);
     return {
-      deduplicatedRows: [...deduplicated.values()].slice(0, this.prLimit),
-      debugEntries,
+      deduplicatedRows: rankedRows.rows.slice(0, this.prLimit),
+      preferredRepoRowCount: rankedRows.preferredCount,
+      nonPreferredRepoRowCount: rankedRows.nonPreferredCount,
+      debugEntries: [
+        {
+          query,
+          scopeQualifiers,
+          limit: this.prLimit,
+          rawResultCount: parsed.length,
+          rawRows: parsed,
+        },
+      ],
     };
   }
 
@@ -469,13 +563,13 @@ export class GitHubCliAdapter implements ICodeProvider {
     const dateQualifier = window ? `closed:${window.startDate}..${window.endDate}` : undefined;
     const baseQueryBits = [`author:${author}`, "is:pr", "is:merged", ...(dateQualifier ? [dateQualifier] : [])];
     const keywordBits = buildKeywordQueryBits(request.queries, request.subject.displayName);
-    const initialSearch = await this.runSearchAcrossRepoFilters([...baseQueryBits, ...keywordBits]);
-    const shouldFallback = keywordBits.length > 0 && initialSearch.deduplicatedRows.length === 0;
-    const fallbackSearch = shouldFallback ? await this.runSearchAcrossRepoFilters(baseQueryBits) : undefined;
-    const finalRows = fallbackSearch?.deduplicatedRows ?? initialSearch.deduplicatedRows;
-    const debugEntries = fallbackSearch
-      ? [...initialSearch.debugEntries, ...fallbackSearch.debugEntries]
-      : initialSearch.debugEntries;
+    const keywordSearch = keywordBits.length > 0 ? await this.runSearch([...baseQueryBits, ...keywordBits]) : undefined;
+    const broadSearch = await this.runSearch(baseQueryBits);
+    const mergedSearch = mergeSearchRuns(this.preferredRepoSet, this.prLimit, keywordSearch, broadSearch);
+    const finalRows = mergedSearch.deduplicatedRows;
+    const debugEntries = mergedSearch.debugEntries;
+    const preferredRepoRowCount = mergedSearch.preferredRepoRowCount;
+    const nonPreferredRepoRowCount = mergedSearch.nonPreferredRepoRowCount;
     const enrichedRows = await this.enrichRows(finalRows);
     const filteredRows = window
       ? enrichedRows.filter((row) =>
@@ -490,9 +584,17 @@ export class GitHubCliAdapter implements ICodeProvider {
       deduplicatedRowCount: filteredRows.length,
       searches: debugEntries,
       rows: filteredRows,
+      orgQualifier: this.orgQualifier,
+      preferredRepos: this.preferredRepos,
+      rankingNote:
+        this.preferredRepos.length > 0
+          ? "Rows are stable-sorted so preferred repositories appear first."
+          : undefined,
+      preferredRepoRowCount,
+      nonPreferredRepoRowCount,
       appliedDateQualifier: dateQualifier,
       postFilterDroppedCount: enrichedRows.length - filteredRows.length || undefined,
-      fallbackApplied: shouldFallback || undefined,
+      fallbackApplied: keywordBits.length > 0 || undefined,
     };
     await this.writeDebugOutput();
 
@@ -505,13 +607,13 @@ export class GitHubCliAdapter implements ICodeProvider {
     const dateQualifier = window ? `updated:${window.startDate}..${window.endDate}` : undefined;
     const baseQueryBits = [`reviewed-by:${reviewer}`, "is:pr", ...(dateQualifier ? [dateQualifier] : [])];
     const keywordBits = buildKeywordQueryBits(request.queries, request.subject.displayName);
-    const initialSearch = await this.runSearchAcrossRepoFilters([...baseQueryBits, ...keywordBits]);
-    const shouldFallback = keywordBits.length > 0 && initialSearch.deduplicatedRows.length === 0;
-    const fallbackSearch = shouldFallback ? await this.runSearchAcrossRepoFilters(baseQueryBits) : undefined;
-    const finalRows = fallbackSearch?.deduplicatedRows ?? initialSearch.deduplicatedRows;
-    const debugEntries = fallbackSearch
-      ? [...initialSearch.debugEntries, ...fallbackSearch.debugEntries]
-      : initialSearch.debugEntries;
+    const keywordSearch = keywordBits.length > 0 ? await this.runSearch([...baseQueryBits, ...keywordBits]) : undefined;
+    const broadSearch = await this.runSearch(baseQueryBits);
+    const mergedSearch = mergeSearchRuns(this.preferredRepoSet, this.prLimit, keywordSearch, broadSearch);
+    const finalRows = mergedSearch.deduplicatedRows;
+    const debugEntries = mergedSearch.debugEntries;
+    const preferredRepoRowCount = mergedSearch.preferredRepoRowCount;
+    const nonPreferredRepoRowCount = mergedSearch.nonPreferredRepoRowCount;
     const enrichedRows = await this.enrichRows(finalRows);
     const filteredRows = window
       ? enrichedRows.filter((row) =>
@@ -526,9 +628,17 @@ export class GitHubCliAdapter implements ICodeProvider {
       deduplicatedRowCount: filteredRows.length,
       searches: debugEntries,
       rows: filteredRows,
+      orgQualifier: this.orgQualifier,
+      preferredRepos: this.preferredRepos,
+      rankingNote:
+        this.preferredRepos.length > 0
+          ? "Rows are stable-sorted so preferred repositories appear first."
+          : undefined,
+      preferredRepoRowCount,
+      nonPreferredRepoRowCount,
       appliedDateQualifier: dateQualifier,
       postFilterDroppedCount: enrichedRows.length - filteredRows.length || undefined,
-      fallbackApplied: shouldFallback || undefined,
+      fallbackApplied: keywordBits.length > 0 || undefined,
     };
     await this.writeDebugOutput();
 

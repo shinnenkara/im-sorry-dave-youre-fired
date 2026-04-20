@@ -15,13 +15,10 @@ import type { McpServerConfig } from "../config/types.js";
 import { listMcpTools } from "../providers/mcpClient.js";
 
 const slackMcpUrl = "https://mcp.slack.com/mcp";
-const slackMcpDocsUrl = "https://docs.slack.dev/ai/slack-mcp-server/";
+const slackMcpDocsUrl = "https://docs.slack.dev/ai/slack-mcp-server/developing";
 const slackAppsDashboardUrl = "https://api.slack.com/apps";
 const localCallbackUrl = "http://localhost:3334/oauth/callback";
-const slackAgentProjectName = "im-sorry-slack";
-const slackAgentProjectPath = resolve(slackAgentProjectName);
-const slackAgentTemplate = "slack-samples/bolt-js-starter-agent";
-const slackAgentTemplateSubdir = "claude-agent-sdk";
+const localTemplatePath = resolve("templates", "im-sorry-slack-template");
 
 function extractErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -169,251 +166,64 @@ async function ensureSlackLogin(): Promise<void> {
   output.write("Slack CLI login detected.\n");
 }
 
-async function ensureSlackAgentProject(): Promise<void> {
-  if (existsSync(slackAgentProjectPath)) {
-    output.write(`Using existing Slack agent project: ${slackAgentProjectName}\n`);
-    return;
-  }
-  output.write(`\nCreating Slack agent project: ${slackAgentProjectName}\n`);
-  output.write(`Template: ${slackAgentTemplate} (${slackAgentTemplateSubdir})\n`);
-  await execa(
-    "slack",
-    [
-      "create",
-      slackAgentProjectName,
-      "--template",
-      slackAgentTemplate,
-      "--subdir",
-      slackAgentTemplateSubdir,
-    ],
-    { stdio: "inherit" },
-  );
-}
-
-interface SlackManifest {
-  display_information: {
-    name: string;
-  };
-  features: {
-    bot_user: {
-      display_name: string;
-      always_online: boolean;
-    };
-  };
-  oauth_config: {
-    redirect_urls: string[];
-    scopes: {
-      user: string[];
-      bot: string[];
-    };
-  };
-  settings: {
-    org_deploy_enabled: boolean;
-    socket_mode_enabled: boolean;
-    is_hosted: boolean;
-    token_rotation_enabled: boolean;
-  };
-}
-
-interface LinkedSlackApp {
-  appId: string;
-  teamId?: string;
-  teamDomain?: string;
-}
-
-async function getLinkedSlackApp(): Promise<LinkedSlackApp | null> {
-  const candidatePaths = [
-    resolve(slackAgentProjectPath, ".slack", "apps.dev.json"),
-    resolve(slackAgentProjectPath, ".slack", "apps.json"),
-  ];
-  for (const appsPath of candidatePaths) {
-    if (!existsSync(appsPath)) {
-      continue;
-    }
-    try {
-      const raw = await readFile(appsPath, "utf8");
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      const first = Object.values(parsed)[0];
-      if (first && typeof first === "object" && !Array.isArray(first)) {
-        const record = first as Record<string, unknown>;
-        const appId = typeof record.app_id === "string" ? record.app_id : "";
-        if (appId.length > 0) {
-          return {
-            appId,
-            teamId: typeof record.team_id === "string" ? record.team_id : undefined,
-            teamDomain: typeof record.team_domain === "string" ? record.team_domain : undefined,
-          };
-        }
-      }
-    } catch {
-      // Try next candidate path.
-    }
-  }
-  return null;
-}
-
-function buildSlackAgentManifest(): SlackManifest {
-  return {
-    display_information: {
-      name: slackAgentProjectName,
-    },
-    features: {
-      bot_user: {
-        display_name: slackAgentProjectName,
-        always_online: false,
-      },
-    },
-    oauth_config: {
-      redirect_urls: [localCallbackUrl],
-      scopes: {
-        user: [
-          "search:read.public",
-          "search:read.private",
-          "search:read.mpim",
-          "search:read.im",
-          "search:read.files",
-          "search:read.users",
-          "channels:history",
-          "groups:history",
-          "mpim:history",
-          "im:history",
-          "canvases:read",
-          "users:read",
-          "users:read.email",
-        ],
-        bot: ["chat:read"],
-      },
-    },
-    settings: {
-      org_deploy_enabled: false,
-      socket_mode_enabled: false,
-      is_hosted: false,
-      token_rotation_enabled: false,
-    },
-  };
-}
-
-async function enforceSlackAgentManifest(): Promise<void> {
-  const manifestPath = resolve(slackAgentProjectPath, "manifest.json");
-  const manifest = buildSlackAgentManifest();
-  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-  output.write(`Enforced Slack app manifest: ${manifestPath}\n`);
-}
-
-async function isSlackAppLinkedToProject(): Promise<boolean> {
-  const candidatePaths = [
-    resolve(slackAgentProjectPath, ".slack", "apps.dev.json"),
-    resolve(slackAgentProjectPath, ".slack", "apps.json"),
-  ];
-  for (const appsPath of candidatePaths) {
-    if (!existsSync(appsPath)) {
-      continue;
-    }
-    try {
-      const raw = await readFile(appsPath, "utf8");
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      if (Object.keys(parsed).length > 0) {
-        return true;
-      }
-    } catch {
-      // keep checking other candidate files
-    }
-  }
-  return false;
-}
-
-async function ensureSlackAppInstalled(rl: ReturnType<typeof createInterface>): Promise<void> {
-  output.write(`\nSlack app project path: ${slackAgentProjectPath}\n`);
-  output.write(`Required redirect URL: ${localCallbackUrl}\n`);
-  const linked = await isSlackAppLinkedToProject();
-  if (!linked) {
-    output.write("\nNo linked Slack app found for this project.\n");
-    output.write("Running `slack app install --environment local` now.\n");
-    output.write("This installs/links the local app without starting the runtime server.\n\n");
-    try {
-      await execa("slack", ["app", "install", "--environment", "local"], {
-        cwd: slackAgentProjectPath,
-        stdio: "inherit",
-      });
-    } catch (error) {
-      const message = extractErrorMessage(error);
-      const normalized = message.toLowerCase();
-      const isInteractiveTtyIssue = normalized.includes("not a tty") || normalized.includes("prompt_error");
-      if (isInteractiveTtyIssue) {
-        output.write("\nAutomatic Slack app install requires an interactive TTY.\n");
-        output.write(`Run this manually, then return:\n  cd ${slackAgentProjectName} && slack app install --environment local\n`);
-        output.write("Waiting for your confirmation...\n");
-        await rl.question("Press Enter after manual app install finishes...");
-      } else {
-        output.write("\n`slack app install` exited unexpectedly.\n");
-        output.write(`Details: ${message}\n`);
-      }
-    }
-    output.write("Waiting for your confirmation...\n");
-    const installed = (await rl.question("Did you see Slack 'App Install ... Finished' in output? [Y/n]: "))
-      .trim()
-      .toLowerCase();
-    if (installed === "n") {
-      output.write("\nPlease run this manually and complete app install:\n");
-      output.write(`  cd ${slackAgentProjectName} && slack app install --environment local\n`);
-      output.write("When prompted, choose team and Create a new app.\n");
-      output.write("Waiting for your confirmation...\n");
-      await rl.question("Press Enter after app install finishes...");
-    }
-  } else {
-    output.write("Slack app is already linked to this project.\n");
-    const rerun = (await rl.question("Run `slack app install --environment local` to re-sync manifest/install? [y/N]: "))
-      .trim()
-      .toLowerCase();
-    if (rerun === "y") {
-      try {
-        await execa("slack", ["app", "install", "--environment", "local"], {
-          cwd: slackAgentProjectPath,
-          stdio: "inherit",
-        });
-      } catch (error) {
-        const message = extractErrorMessage(error);
-        const normalized = message.toLowerCase();
-        const isInteractiveTtyIssue = normalized.includes("not a tty") || normalized.includes("prompt_error");
-        if (isInteractiveTtyIssue) {
-          output.write("\nAutomatic re-sync requires an interactive TTY.\n");
-          output.write(
-            `Run this manually, then return:\n  cd ${slackAgentProjectName} && slack app install --environment local\n`,
-          );
-          output.write("Waiting for your confirmation...\n");
-          await rl.question("Press Enter after manual app install finishes...");
-        } else {
-          throw error;
-        }
-      }
-    }
-  }
-
-  const linkedAfterSetup = await isSlackAppLinkedToProject();
-  const linkedApp = await getLinkedSlackApp();
-  const appSettingsUrl = linkedApp ? `https://api.slack.com/apps/${linkedApp.appId}` : slackAppsDashboardUrl;
-  if (linkedAfterSetup) {
-    output.write("\nOpening app settings to copy client_id/client_secret...\n");
-    try {
-      await execa("slack", ["app", "settings"], { cwd: slackAgentProjectPath, stdio: "inherit" });
-    } catch {
-      output.write("Could not open via Slack CLI in this terminal context.\n");
-      openUrl(appSettingsUrl);
-    }
-  } else {
-    output.write("\nSlack app may be installed but not linked in local config yet.\n");
-    output.write("Opening Slack apps dashboard instead.\n");
-    openUrl(slackAppsDashboardUrl);
-    output.write(`Find app "${slackAgentProjectName}", then copy client_id/client_secret from its settings.\n`);
-  }
-  output.write(`If browser does not open, use: ${appSettingsUrl}\n`);
-  if (linkedApp?.teamDomain) {
-    output.write(`Workspace: ${linkedApp.teamDomain}\n`);
-  }
+function printSetupGuide(): void {
+  output.write("\nOfficial Slack setup steps (docs-first):\n");
+  output.write("1) Authenticate Slack CLI:\n");
+  output.write("   slack login\n\n");
+  output.write("2) Create a new app from this repository template:\n");
+  output.write(`   slack create im-sorry-slack -t "${localTemplatePath}"\n\n`);
+  output.write("3) Install/link the app in that generated project:\n");
+  output.write("   cd im-sorry-slack\n");
+  output.write("   slack app install --environment local\n\n");
+  output.write("4) Open app settings:\n");
+  output.write("   slack app settings\n");
+  output.write("   (or https://api.slack.com/apps/<APP_ID> from install output)\n\n");
+  output.write("5) In Slack app settings, ensure:\n");
+  output.write(`   - Redirect URL includes: ${localCallbackUrl}\n`);
+  output.write("   - Agents & AI Apps -> Model Context Protocol is enabled\n");
+  output.write("   - Direct MCP page: https://api.slack.com/apps/<APP_ID>/app-assistant\n");
+  output.write("   - Note: MCP toggle cannot be auto-enabled by `slack app install`\n");
+  output.write(`   - App settings URL: ${slackAppsDashboardUrl}\n`);
+  output.write(`6) Copy SLACK_CLIENT_ID and SLACK_CLIENT_SECRET into ${resolve(".env")}\n\n`);
+  output.write(`Template manifest path: ${resolve(localTemplatePath, "manifest.json")}\n`);
   output.write(`Slack MCP docs: ${slackMcpDocsUrl}\n`);
-  output.write("\nReminder: this setup command cannot read client_secret automatically from Slack.\n");
-  output.write("Waiting for your confirmation...\n");
-  await rl.question("Press Enter after opening app settings and copying client_id/client_secret...");
+}
+
+async function collectSlackCredentials(rl: ReturnType<typeof createInterface>): Promise<{ clientId: string; clientSecret: string }> {
+  const currentClientId = (process.env.SLACK_CLIENT_ID ?? "").trim();
+  const currentClientSecret = (process.env.SLACK_CLIENT_SECRET ?? "").trim();
+  if (currentClientId.length > 0 && currentClientSecret.length > 0) {
+    output.write("\nUsing SLACK_CLIENT_ID / SLACK_CLIENT_SECRET from environment.\n");
+    return { clientId: currentClientId, clientSecret: currentClientSecret };
+  }
+
+  output.write("\nPaste Slack app OAuth credentials from app settings:\n");
+  output.write("  - Basic Information -> App Credentials -> Client ID\n");
+  output.write("  - Basic Information -> App Credentials -> Client Secret\n");
+  output.write(`  - Required redirect URL in OAuth settings: ${localCallbackUrl}\n`);
+  output.write(`  - App settings: ${slackAppsDashboardUrl}\n`);
+
+  const clientIdInput = await rl.question(
+    `SLACK_CLIENT_ID${currentClientId ? " (press Enter to keep current)" : ""}: `,
+  );
+  const clientSecretInput = await rl.question(
+    `SLACK_CLIENT_SECRET${currentClientSecret ? " (press Enter to keep current)" : ""}: `,
+  );
+
+  const clientId = (clientIdInput.trim() || currentClientId).trim();
+  const clientSecret = (clientSecretInput.trim() || currentClientSecret).trim();
+  if (!clientId || !clientSecret) {
+    throw new Error(
+      "Both SLACK_CLIENT_ID and SLACK_CLIENT_SECRET are required. Add them to .env, then rerun `npm run setup:slack`.",
+    );
+  }
+
+  await upsertEnvFile({
+    SLACK_CLIENT_ID: clientId,
+    SLACK_CLIENT_SECRET: clientSecret,
+  });
+  output.write(`Updated ${resolve(".env")} with Slack credentials.\n`);
+  return { clientId, clientSecret };
 }
 
 async function verifySlackMcp(
@@ -461,43 +271,18 @@ async function verifySlackMcp(
 async function main(): Promise<void> {
   const rl = createInterface({ input, output });
   try {
-    output.write("Slack setup assistant\n");
-    output.write("=====================\n");
+    output.write("Slack MCP verifier\n");
+    output.write("==================\n");
     await ensureSlackCliInstalled();
     await ensureSlackLogin();
-    await ensureSlackAgentProject();
-    await enforceSlackAgentManifest();
-    await ensureSlackAppInstalled(rl);
+    printSetupGuide();
+    output.write("Complete the steps above first if this is a new setup.\n");
+    await rl.question("Press Enter to continue with MCP verification...");
 
-    const currentClientId = process.env.SLACK_CLIENT_ID ?? "";
-    const currentClientSecret = process.env.SLACK_CLIENT_SECRET ?? "";
-    output.write("\nPaste Slack app OAuth credentials from app settings:\n");
-    output.write("  - Basic Information -> App Credentials -> Client ID\n");
-    output.write("  - Basic Information -> App Credentials -> Client Secret\n");
-    output.write(`Required redirect URL in Slack app OAuth settings: ${localCallbackUrl}\n`);
-
-    const clientIdInput = await rl.question(
-      `SLACK_CLIENT_ID${currentClientId ? " (press Enter to keep current)" : ""}: `,
-    );
-    const clientSecretInput = await rl.question(
-      `SLACK_CLIENT_SECRET${currentClientSecret ? " (press Enter to keep current)" : ""}: `,
-    );
-
-    const clientId = (clientIdInput.trim() || currentClientId).trim();
-    const clientSecret = (clientSecretInput.trim() || currentClientSecret).trim();
-    if (!clientId || !clientSecret) {
-      throw new Error("Both SLACK_CLIENT_ID and SLACK_CLIENT_SECRET are required.");
-    }
-
-    await upsertEnvFile({
-      SLACK_CLIENT_ID: clientId,
-      SLACK_CLIENT_SECRET: clientSecret,
-    });
-    output.write("\nUpdated .env with Slack credentials.\n");
-
+    const { clientId, clientSecret } = await collectSlackCredentials(rl);
     await verifySlackMcp(rl, clientId, clientSecret);
 
-    output.write("\nSetup complete.\n");
+    output.write("\nSlack MCP verification complete.\n");
     output.write("Next run:\n");
     output.write("  npm run dev -- --config configs/slack-test.yaml\n");
   } catch (error) {

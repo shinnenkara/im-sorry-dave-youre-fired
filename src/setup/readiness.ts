@@ -45,6 +45,20 @@ async function checkGeminiSetup(): Promise<ReadinessResult> {
   };
 }
 
+async function checkAnthropicSetup(): Promise<ReadinessResult> {
+  if (process.env.ANTHROPIC_API_KEY) {
+    return {
+      ok: true,
+      message: "Anthropic API key found.",
+    };
+  }
+  return {
+    ok: false,
+    message: "Missing ANTHROPIC_API_KEY.",
+    setupHelp: "Set ANTHROPIC_API_KEY before running the review with Claude models.",
+  };
+}
+
 async function checkGithubCliSetup(): Promise<ReadinessResult> {
   try {
     await execa("gh", ["auth", "status"], { all: true });
@@ -87,14 +101,15 @@ async function checkClickupMcpSetup(): Promise<ReadinessResult> {
 
 async function checkSlackMcpSetup(): Promise<ReadinessResult> {
   return {
-    ok: false,
-    message: "Slack interactive provider setup is not supported yet.",
-    setupHelp: "Use YAML config for Slack until interactive setup support is added.",
+    ok: true,
+    message: "Slack interactive setup is available.",
+    setupHelp: "You will be prompted for Slack user email.",
   };
 }
 
 const checks: Record<ReadinessCheckId, ReadinessCheck> = {
   gemini: checkGeminiSetup,
+  anthropic: checkAnthropicSetup,
   "github-cli": checkGithubCliSetup,
   "clickup-mcp": checkClickupMcpSetup,
   "slack-mcp": checkSlackMcpSetup,

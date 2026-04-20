@@ -1,0 +1,46 @@
+{
+  "display_information": {
+    "name": "im-sorry-slack-template"
+  },
+  "features": {
+    "app_home": {
+      "home_tab_enabled": false,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
+    "bot_user": {
+      "display_name": "im-sorry-slack-template",
+      "always_online": false
+    }
+  },
+  "oauth_config": {
+    "redirect_urls": [
+      "http://localhost:3334/oauth/callback"
+    ],
+    "scopes": {
+      "user": [
+        "search:read.public",
+        "search:read.private",
+        "search:read.mpim",
+        "search:read.im",
+        "search:read.files",
+        "search:read.users",
+        "channels:history",
+        "groups:history",
+        "mpim:history",
+        "im:history",
+        "users:read",
+        "users:read.email",
+        "canvases:read"
+      ],
+      "bot": [
+        "app_mentions:read"
+      ]
+    }
+  },
+  "settings": {
+    "org_deploy_enabled": true,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

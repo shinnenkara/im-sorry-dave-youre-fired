@@ -17,6 +17,20 @@ function slugify(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
+function normalizePriorityChannels(value?: string | string[]): string[] | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const channels = (Array.isArray(value) ? value : [value])
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .map((item) => item.replace(/^#/, ""));
+  if (channels.length === 0) {
+    return undefined;
+  }
+  return [...new Set(channels)];
+}
+
 class DebugArtifactPaths {
   private readonly outDir: string;
   private readonly subjectSlug: string;
@@ -101,6 +115,9 @@ export class ProviderFactory {
           expectedWorkspace: config.expectedWorkspace,
           expectedUserId: config.expectedUserId,
           expectedUserEmail: config.expectedUserEmail,
+          priorityChannels: normalizePriorityChannels(config.priorityChannels),
+          enableReactionReads: config.reactions?.enabled,
+          maxReactionMessages: config.reactions?.maxMessages,
         });
     }
   }
@@ -113,6 +130,7 @@ export class ProviderFactory {
     switch (config.type) {
       case "github-cli":
         return new GitHubCliAdapter({
+          org: config.org,
           repo: config.repo,
           debugOutputPath: config.debugOutputPath ?? this.debugPaths.code(),
           prLimit: config.prLimit,

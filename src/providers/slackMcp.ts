@@ -15,6 +15,9 @@ export interface SlackMcpProviderOptions {
   expectedWorkspace?: string;
   expectedUserId?: string;
   expectedUserEmail?: string;
+  priorityChannels?: string[];
+  enableReactionReads?: boolean;
+  maxReactionMessages?: number;
 }
 
 interface ParsedTimeframeRange {
@@ -23,13 +26,34 @@ interface ParsedTimeframeRange {
 }
 
 interface SearchDebugEntry {
-  mode: "planned-query" | "dm-probe";
+  mode: "planned-query" | "dm-probe" | "priority-probe";
   query: string;
+  timeframeSlice?: string;
   attemptedQueries?: string[];
   chunks: string[];
   parsedTextCount: number;
   noResults: boolean;
   extractedConversations: number;
+}
+
+interface McpCallDebugEntry {
+  stage: string;
+  tool: string;
+  argsPreview: string;
+  durationMs: number;
+  ok: boolean;
+  error?: string;
+}
+
+interface ThreadRef {
+  channelId: string;
+  threadTs: string;
+}
+
+interface MentionProfile {
+  userId: string;
+  username?: string;
+  title?: string;
 }
 
 interface ChannelCandidate {
@@ -59,13 +83,15 @@ interface ConversationCandidate {
 interface SlackProfileSnapshot {
   userId?: string;
   username?: string;
+  realName?: string;
+  title?: string;
   email?: string;
   organizationName?: string;
 }
 
 export class SlackMcpAdapter implements ICommProvider {
   public readonly name = "slack-mcp";
-  private static readonly docsUrl = "https://docs.slack.dev/ai/mcp-server";
+  private static readonly docsUrl = "https://docs.slack.dev/ai/slack-mcp-server/developing";
   private static readonly mcpRemoteStaticOauthDocsUrl =
     "https://github.com/geelen/mcp-remote?tab=readme-ov-file#static-oauth-client-information";
   private static readonly searchToolAliases: Record<string, string> = {
@@ -79,9 +105,18 @@ export class SlackMcpAdapter implements ICommProvider {
   private readonly expectedWorkspace?: string;
   private readonly expectedUserId?: string;
   private readonly expectedUserEmail?: string;
+  private readonly priorityChannels: string[];
+  private readonly enableReactionReads: boolean;
+  private readonly maxReactionMessages: number;
   private static readonly maxFinalEvidence = 24;
   private static readonly maxChannelScans = 25;
   private static readonly maxChannelThreadReads = 10;
+  private static readonly maxMentionProfiles = 40;
+  private static readonly maxTimeSlices = 8;
+  private static readonly defaultTimeSliceDays = 30;
+  private static readonly threadHydrationEnabled = (process.env.REVIEW_ENABLE_THREAD_HYDRATION ?? "0") === "1";
+  private static readonly runtimeDebugEnabled =
+    (process.env.REVIEW_RUNTIME_DEBUG ?? process.env.REVIEW_DEBUG ?? "1").toLowerCase() !== "0";
   private hasOpenedSetupLink = false;
   private resolvedUserPromise?: Promise<string>;
   private resolvedSearchToolPromise?: Promise<string>;
@@ -93,6 +128,17 @@ export class SlackMcpAdapter implements ICommProvider {
     this.expectedWorkspace = options.expectedWorkspace;
     this.expectedUserId = options.expectedUserId;
     this.expectedUserEmail = options.expectedUserEmail;
+    this.priorityChannels = (options.priorityChannels ?? []).map((item) => item.toLowerCase());
+    this.enableReactionReads = options.enableReactionReads === true;
+    this.maxReactionMessages = Math.max(1, options.maxReactionMessages ?? 30);
+  }
+
+  private logRuntime(message: string): void {
+    if (!SlackMcpAdapter.runtimeDebugEnabled) {
+      return;
+    }
+    // Emergency runtime diagnostics for long-running Slack MCP collection.
+    console.log(`[slack-runtime] ${message}`);
   }
 
   private async writeDebugOutput(payload: Record<string, unknown>): Promise<void> {
@@ -202,6 +248,55 @@ export class SlackMcpAdapter implements ICommProvider {
       return undefined;
     }
     return { start: match[1], end: match[2] };
+  }
+
+  private static parseDateOnly(value: string): Date | undefined {
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    if (Number.isNaN(parsed.getTime())) {
+      return undefined;
+    }
+    return parsed;
+  }
+
+  private static formatDateOnly(value: Date): string {
+    return value.toISOString().slice(0, 10);
+  }
+
+  private static splitTimeframeIntoSlices(range?: ParsedTimeframeRange): ParsedTimeframeRange[] {
+    if (!range) {
+      return [];
+    }
+    const startDate = SlackMcpAdapter.parseDateOnly(range.start);
+    const endDate = SlackMcpAdapter.parseDateOnly(range.end);
+    if (!startDate || !endDate || startDate > endDate) {
+      return [range];
+    }
+    const slices: ParsedTimeframeRange[] = [];
+    let cursor = new Date(startDate.getTime());
+    while (cursor <= endDate && slices.length < SlackMcpAdapter.maxTimeSlices) {
+      const sliceEnd = new Date(
+        Math.min(
+          endDate.getTime(),
+          cursor.getTime() + (SlackMcpAdapter.defaultTimeSliceDays - 1) * 24 * 60 * 60 * 1000,
+        ),
+      );
+      slices.push({
+        start: SlackMcpAdapter.formatDateOnly(cursor),
+        end: SlackMcpAdapter.formatDateOnly(sliceEnd),
+      });
+      cursor = new Date(sliceEnd.getTime() + 24 * 60 * 60 * 1000);
+    }
+    if (slices.length === 0) {
+      return [range];
+    }
+    return slices;
+  }
+
+  private static formatSliceLabel(range?: ParsedTimeframeRange): string | undefined {
+    if (!range) {
+      return undefined;
+    }
+    return `${range.start}..${range.end}`;
   }
 
   private static extractUserId(value: string): string | undefined {
@@ -316,6 +411,48 @@ export class SlackMcpAdapter implements ICommProvider {
     return refs;
   }
 
+  private static normalizeChannelKey(value: string): string {
+    return value.trim().toLowerCase().replace(/^#/, "");
+  }
+
+  private static buildPriorityQueries(subject: string, channels: string[], range?: ParsedTimeframeRange): string[] {
+    if (channels.length === 0) {
+      return [];
+    }
+    const subjectBit = `"${subject}"`;
+    return channels
+      .map((channel) => channel.trim())
+      .filter((channel) => channel.length > 0)
+      .map((channel) => SlackMcpAdapter.formatDateScopedQuery(`${subjectBit} in:#${channel.replace(/^#/, "")}`, range));
+  }
+
+  private static extractMentionedUserIds(text: string): string[] {
+    const ids = new Set<string>();
+    for (const match of text.matchAll(/<@([UW][A-Z0-9]{6,})>/g)) {
+      if (match[1]) {
+        ids.add(match[1]);
+      }
+    }
+    return [...ids];
+  }
+
+  private static parseMessageRefs(text: string): Array<{ channelId: string; messageTs: string }> {
+    const refs: Array<{ channelId: string; messageTs: string }> = [];
+    for (const match of text.matchAll(/\/archives\/([A-Z0-9]+)\/p(\d{16})/g)) {
+      const channelId = match[1];
+      const compactTs = match[2];
+      if (!channelId || !compactTs) {
+        continue;
+      }
+      const seconds = compactTs.slice(0, 10);
+      const micros = compactTs.slice(10);
+      if (seconds.length === 10 && micros.length === 6) {
+        refs.push({ channelId, messageTs: `${seconds}.${micros}` });
+      }
+    }
+    return refs;
+  }
+
   private static formatDateScopedQuery(baseQuery: string, range?: ParsedTimeframeRange): string {
     if (!range) {
       return baseQuery.trim();
@@ -343,10 +480,47 @@ export class SlackMcpAdapter implements ICommProvider {
         snapshot.userId = value;
       } else if (key === "username") {
         snapshot.username = value;
+      } else if (key === "real name") {
+        snapshot.realName = value;
+      } else if (key === "title") {
+        snapshot.title = value;
       } else if (key === "email") {
         snapshot.email = value;
       } else if (key === "organization name") {
         snapshot.organizationName = value;
+      }
+    }
+    return snapshot;
+  }
+
+  private static parseProfileSnapshotFromObject(value: Record<string, unknown>): SlackProfileSnapshot {
+    const snapshot: SlackProfileSnapshot = {};
+    const userNode = value.user;
+    const user = userNode && typeof userNode === "object" && !Array.isArray(userNode) ? userNode : value;
+    if (!user || typeof user !== "object" || Array.isArray(user)) {
+      return snapshot;
+    }
+    const record = user as Record<string, unknown>;
+    if (typeof record.id === "string" && record.id.length > 0) {
+      snapshot.userId = record.id;
+    }
+    if (typeof record.name === "string" && record.name.length > 0) {
+      snapshot.username = record.name;
+    }
+    const profileNode = record.profile;
+    if (profileNode && typeof profileNode === "object" && !Array.isArray(profileNode)) {
+      const profile = profileNode as Record<string, unknown>;
+      if (typeof profile.email === "string" && profile.email.length > 0) {
+        snapshot.email = profile.email;
+      }
+      if (typeof profile.title === "string" && profile.title.length > 0) {
+        snapshot.title = profile.title;
+      }
+      if (typeof profile.real_name === "string" && profile.real_name.length > 0) {
+        snapshot.realName = profile.real_name;
+      }
+      if (typeof profile.display_name === "string" && profile.display_name.length > 0 && !snapshot.username) {
+        snapshot.username = profile.display_name;
       }
     }
     return snapshot;
@@ -364,13 +538,25 @@ export class SlackMcpAdapter implements ICommProvider {
       .replace(/\.slack\.com$/, "");
   }
 
-  private async readCurrentProfileSnapshot(): Promise<SlackProfileSnapshot | undefined> {
+  private async readCurrentProfileSnapshot(callDebugEntries?: McpCallDebugEntry[]): Promise<SlackProfileSnapshot | undefined> {
     try {
-      const profileChunks = await this.callToolWithFallbackArgs("slack_read_user_profile", [{}, { user: "me" }, { user_id: "me" }]);
+      const profileChunks = await this.callToolWithFallbackArgs(
+        "slack_read_user_profile",
+        [{}, { user: "me" }, { user_id: "me" }],
+        "profile:read-current",
+        callDebugEntries,
+      );
       for (const chunk of profileChunks) {
+        const parsedObject = SlackMcpAdapter.extractObject(chunk);
+        if (parsedObject) {
+          const fromObject = SlackMcpAdapter.parseProfileSnapshotFromObject(parsedObject);
+          if (fromObject.userId || fromObject.email || fromObject.organizationName || fromObject.username || fromObject.title) {
+            return fromObject;
+          }
+        }
         const text = SlackMcpAdapter.extractResultText(chunk);
         const parsed = SlackMcpAdapter.parseProfileSnapshot(text);
-        if (parsed.userId || parsed.email || parsed.organizationName || parsed.username) {
+        if (parsed.userId || parsed.email || parsed.organizationName || parsed.username || parsed.title) {
           return parsed;
         }
       }
@@ -599,6 +785,15 @@ export class SlackMcpAdapter implements ICommProvider {
     );
   }
 
+  private static toArgsPreview(args: Record<string, unknown>): string {
+    try {
+      const serialized = JSON.stringify(args);
+      return serialized.length > 240 ? `${serialized.slice(0, 240)}...` : serialized;
+    } catch {
+      return "[unserializable args]";
+    }
+  }
+
   private buildSearchArgCandidates(
     searchTool: string,
     request: ProviderQueryRequest,
@@ -622,14 +817,45 @@ export class SlackMcpAdapter implements ICommProvider {
     request: ProviderQueryRequest,
     user: string,
     query: string,
+    stage: string,
+    callDebugEntries?: McpCallDebugEntry[],
   ): Promise<string[]> {
     const candidates = this.buildSearchArgCandidates(searchTool, request, user, query);
     let lastError: unknown;
+    this.logRuntime(
+      `stage=${stage} tool=${searchTool} argShapes=${candidates.length} query="${query.slice(0, 140)}${query.length > 140 ? "..." : ""}"`,
+    );
     for (const args of candidates) {
+      const startedAt = Date.now();
       try {
-        return await callMcpTool(this.server, searchTool, args);
+        this.logRuntime(`stage=${stage} tool=${searchTool} call:start args=${SlackMcpAdapter.toArgsPreview(args)}`);
+        const chunks = await callMcpTool(this.server, searchTool, args);
+        this.logRuntime(
+          `stage=${stage} tool=${searchTool} call:ok durationMs=${Date.now() - startedAt} chunks=${chunks.length}`,
+        );
+        callDebugEntries?.push({
+          stage,
+          tool: searchTool,
+          argsPreview: SlackMcpAdapter.toArgsPreview(args),
+          durationMs: Date.now() - startedAt,
+          ok: true,
+        });
+        return chunks;
       } catch (error) {
         lastError = error;
+        this.logRuntime(
+          `stage=${stage} tool=${searchTool} call:error durationMs=${Date.now() - startedAt} error="${
+            error instanceof Error ? error.message : String(error)
+          }"`,
+        );
+        callDebugEntries?.push({
+          stage,
+          tool: searchTool,
+          argsPreview: SlackMcpAdapter.toArgsPreview(args),
+          durationMs: Date.now() - startedAt,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
         if (error instanceof McpToolError && SlackMcpAdapter.isArgShapeError(error)) {
           continue;
         }
@@ -642,13 +868,40 @@ export class SlackMcpAdapter implements ICommProvider {
   private async callToolWithFallbackArgs(
     toolName: string,
     candidates: Array<Record<string, unknown>>,
+    stage: string,
+    callDebugEntries?: McpCallDebugEntry[],
   ): Promise<string[]> {
     let lastError: unknown;
+    this.logRuntime(`stage=${stage} tool=${toolName} argShapes=${candidates.length}`);
     for (const args of candidates) {
+      const startedAt = Date.now();
       try {
-        return await callMcpTool(this.server, toolName, args);
+        this.logRuntime(`stage=${stage} tool=${toolName} call:start args=${SlackMcpAdapter.toArgsPreview(args)}`);
+        const chunks = await callMcpTool(this.server, toolName, args);
+        this.logRuntime(`stage=${stage} tool=${toolName} call:ok durationMs=${Date.now() - startedAt} chunks=${chunks.length}`);
+        callDebugEntries?.push({
+          stage,
+          tool: toolName,
+          argsPreview: SlackMcpAdapter.toArgsPreview(args),
+          durationMs: Date.now() - startedAt,
+          ok: true,
+        });
+        return chunks;
       } catch (error) {
         lastError = error;
+        this.logRuntime(
+          `stage=${stage} tool=${toolName} call:error durationMs=${Date.now() - startedAt} error="${
+            error instanceof Error ? error.message : String(error)
+          }"`,
+        );
+        callDebugEntries?.push({
+          stage,
+          tool: toolName,
+          argsPreview: SlackMcpAdapter.toArgsPreview(args),
+          durationMs: Date.now() - startedAt,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
         if (error instanceof McpToolError && SlackMcpAdapter.isArgShapeError(error)) {
           continue;
         }
@@ -658,13 +911,66 @@ export class SlackMcpAdapter implements ICommProvider {
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
-  private async resolveSubjectUserId(displayName: string, resolvedUser: string): Promise<string | undefined> {
+  private async resolveSubjectUserId(
+    subject: ProviderQueryRequest["subject"],
+    resolvedUser: string,
+    profileSnapshot?: SlackProfileSnapshot,
+    callDebugEntries?: McpCallDebugEntry[],
+  ): Promise<string | undefined> {
+    const configuredId = SlackMcpAdapter.extractUserId(subject.slackUserId ?? "");
+    if (configuredId) {
+      return configuredId;
+    }
+
+    if (subject.email && profileSnapshot?.email) {
+      if (SlackMcpAdapter.normalizeForCompare(subject.email) === SlackMcpAdapter.normalizeForCompare(profileSnapshot.email)) {
+        const ownId = SlackMcpAdapter.extractUserId(profileSnapshot.userId ?? "");
+        if (ownId) {
+          return ownId;
+        }
+      }
+    }
+
     const direct = SlackMcpAdapter.extractUserId(resolvedUser);
     if (direct) {
       return direct;
     }
+
+    if (subject.email) {
+      try {
+        const chunks = await this.callToolWithFallbackArgs("slack_search_users", [
+          { query: subject.email },
+          { text: subject.email },
+        ], "identity:search-by-email", callDebugEntries);
+        for (const chunk of chunks) {
+          const parsedObject = SlackMcpAdapter.extractObject(chunk);
+          if (parsedObject) {
+            const profile = SlackMcpAdapter.parseProfileSnapshotFromObject(parsedObject);
+            const idFromProfile = SlackMcpAdapter.extractUserId(profile.userId ?? "");
+            if (
+              idFromProfile &&
+              profile.email &&
+              SlackMcpAdapter.normalizeForCompare(profile.email) === SlackMcpAdapter.normalizeForCompare(subject.email)
+            ) {
+              return idFromProfile;
+            }
+          }
+          const resultText = SlackMcpAdapter.extractResultText(chunk);
+          const parsed = SlackMcpAdapter.extractUserId(resultText);
+          if (parsed) {
+            return parsed;
+          }
+        }
+      } catch {
+        // Continue to display-name lookup fallback.
+      }
+    }
+
     try {
-      const chunks = await this.callToolWithFallbackArgs("slack_search_users", [{ query: displayName }, { text: displayName }]);
+      const chunks = await this.callToolWithFallbackArgs("slack_search_users", [
+        { query: subject.displayName },
+        { text: subject.displayName },
+      ], "identity:search-by-display-name", callDebugEntries);
       for (const chunk of chunks) {
         const resultText = SlackMcpAdapter.extractResultText(chunk);
         const parsed = SlackMcpAdapter.extractUserId(resultText);
@@ -676,6 +982,94 @@ export class SlackMcpAdapter implements ICommProvider {
       // Not all workspaces/tools allow user search; continue without strict user id.
     }
     return undefined;
+  }
+
+  private async loadMentionProfiles(
+    userIds: string[],
+    callDebugEntries?: McpCallDebugEntry[],
+  ): Promise<MentionProfile[]> {
+    const selected = userIds.slice(0, SlackMcpAdapter.maxMentionProfiles);
+    this.logRuntime(`mentions:read-profile planned=${selected.length} (requested=${userIds.length})`);
+    const profiles: MentionProfile[] = [];
+    for (const userId of selected) {
+      try {
+        const chunks = await this.callToolWithFallbackArgs("slack_read_user_profile", [
+          { user_id: userId },
+          { user: userId },
+        ], "mentions:read-profile", callDebugEntries);
+        let profile: SlackProfileSnapshot | undefined;
+        for (const chunk of chunks) {
+          const parsedObject = SlackMcpAdapter.extractObject(chunk);
+          if (parsedObject) {
+            const fromObject = SlackMcpAdapter.parseProfileSnapshotFromObject(parsedObject);
+            if (fromObject.userId || fromObject.username || fromObject.title) {
+              profile = fromObject;
+              break;
+            }
+          }
+          const text = SlackMcpAdapter.extractResultText(chunk);
+          const fromText = SlackMcpAdapter.parseProfileSnapshot(text);
+          if (fromText.userId || fromText.username || fromText.title) {
+            profile = fromText;
+            break;
+          }
+        }
+        if (profile) {
+          profiles.push({
+            userId: profile.userId ?? userId,
+            username: profile.username ?? profile.realName,
+            title: profile.title,
+          });
+        }
+      } catch {
+        // Mention profile enrichment is optional.
+      }
+    }
+    return profiles;
+  }
+
+  private async loadOptionalReactions(
+    items: ConversationCandidate[],
+    callDebugEntries?: McpCallDebugEntry[],
+  ): Promise<Record<string, string>> {
+    if (!this.enableReactionReads) {
+      this.logRuntime("reactions:read-message disabled");
+      return {};
+    }
+    const compactReactions: Record<string, string> = {};
+    const messageRefs = new Map<string, { channelId: string; messageTs: string }>();
+    for (const item of items) {
+      for (const ref of SlackMcpAdapter.parseMessageRefs(item.summary)) {
+        messageRefs.set(`${ref.channelId}:${ref.messageTs}`, ref);
+      }
+    }
+    let processed = 0;
+    this.logRuntime(`reactions:read-message planned=${Math.min(messageRefs.size, this.maxReactionMessages)} refs=${messageRefs.size}`);
+    for (const ref of messageRefs.values()) {
+      if (processed >= this.maxReactionMessages) {
+        break;
+      }
+      try {
+        const chunks = await this.callToolWithFallbackArgs("slack_read_message", [
+          { channel_id: ref.channelId, message_ts: ref.messageTs },
+          { channel: ref.channelId, ts: ref.messageTs },
+          { channel: ref.channelId, message_ts: ref.messageTs },
+        ], "reactions:read-message", callDebugEntries);
+        const text = chunks.map((chunk) => SlackMcpAdapter.extractResultText(chunk)).join(" ");
+        const reactionLine = text
+          .split("\n")
+          .map((line) => line.trim())
+          .find((line) => /^reactions?:/i.test(line));
+        if (reactionLine) {
+          compactReactions[`${ref.channelId}:${ref.messageTs}`] = reactionLine.slice(0, 240);
+        }
+      } catch {
+        // Reaction reads are optional and depend on tool availability.
+      }
+      processed += 1;
+    }
+    this.logRuntime(`reactions:read-message completed processed=${processed} reactionsFound=${Object.keys(compactReactions).length}`);
+    return compactReactions;
   }
 
   private maybeOpenLink(url: string): boolean {
@@ -722,103 +1116,216 @@ export class SlackMcpAdapter implements ICommProvider {
     const conversationCandidates: ConversationCandidate[] = [];
     const searchDebugEntries: SearchDebugEntry[] = [];
     const channelScanDebugEntries: ChannelScanDebugEntry[] = [];
+    const mcpCallDebugEntries: McpCallDebugEntry[] = [];
+    const mentionIds = new Set<string>();
+    const pendingThreadRefs = new Map<string, ThreadRef>();
     let user: string | undefined;
     let userId: string | undefined;
     let profileSnapshot: SlackProfileSnapshot | undefined;
     let searchTool: string | undefined;
     let discoveredChannels: ChannelCandidate[] = [];
+    let effectiveSlices: Array<ParsedTimeframeRange | undefined> = [undefined];
     let scannedChannels = 0;
     let threadsRead = 0;
     try {
+      this.logRuntime(`start timeframe="${request.timeframe}" plannedQueries=${request.queries.length}`);
       user = await this.resolveCurrentUser(request.subject.displayName);
       searchTool = await this.resolveSearchTool();
-      profileSnapshot = await this.readCurrentProfileSnapshot();
+      profileSnapshot = await this.readCurrentProfileSnapshot(mcpCallDebugEntries);
       this.assertExpectedIdentity(profileSnapshot);
-      userId = await this.resolveSubjectUserId(request.subject.displayName, user);
+      userId = await this.resolveSubjectUserId(request.subject, user, profileSnapshot, mcpCallDebugEntries);
+      if (!userId && request.subject.slackUserId) {
+        userId = SlackMcpAdapter.extractUserId(request.subject.slackUserId);
+      }
       const timeframeRange = SlackMcpAdapter.parseTimeframeDateRange(request.timeframe);
+      const timeframeSlices = SlackMcpAdapter.splitTimeframeIntoSlices(timeframeRange);
+      effectiveSlices = timeframeSlices.length > 0 ? timeframeSlices : [undefined];
+      this.logRuntime(`timeSlices count=${effectiveSlices.length} values=${effectiveSlices.map((slice) => SlackMcpAdapter.formatSliceLabel(slice) ?? "full").join(",")}`);
+      const queryUser = userId ? `<@${userId}>` : user;
+      this.logRuntime(`threadHydration enabled=${SlackMcpAdapter.threadHydrationEnabled}`);
 
-      // Stage 1: planned search queries, now with Slack-native date filters.
+      // Stage 1: planned search queries with time-sliced windows.
       for (const query of request.queries) {
-        const candidateQueries = SlackMcpAdapter.buildPlannedQueryCandidates(
-          query,
-          request.subject.displayName,
-          timeframeRange,
-        );
-        let selectedQuery = candidateQueries[0] ?? query;
-        let response: string[] = [];
-        let parsedTexts: string[] = [];
-        let extracted: ConversationCandidate[] = [];
-        for (const queryCandidate of candidateQueries) {
-          const currentResponse = await this.callSearchWithFallbackArgs(searchTool, request, user, queryCandidate);
-          const currentTexts = currentResponse.map((chunk) => SlackMcpAdapter.extractResultText(chunk));
-          const currentExtracted = currentTexts
-            .map((text) =>
-              SlackMcpAdapter.buildConversationFromText(
-                "Slack search",
-                text,
-                3,
-                request.subject.displayName,
-                userId,
-              ),
-            )
-            .filter((item): item is ConversationCandidate => Boolean(item));
-          selectedQuery = queryCandidate;
-          response = currentResponse;
-          parsedTexts = currentTexts;
-          extracted = currentExtracted;
-          if (currentExtracted.length > 0 || !currentTexts.every((text) => SlackMcpAdapter.containsNoResults(text))) {
-            break;
+        for (const slice of effectiveSlices) {
+          const candidateQueries = SlackMcpAdapter.buildPlannedQueryCandidates(
+            query,
+            request.subject.displayName,
+            slice,
+          );
+          let selectedQuery = candidateQueries[0] ?? query;
+          let response: string[] = [];
+          let parsedTexts: string[] = [];
+          let extracted: ConversationCandidate[] = [];
+          for (const queryCandidate of candidateQueries) {
+            const currentResponse = await this.callSearchWithFallbackArgs(
+              searchTool,
+              request,
+              queryUser,
+              queryCandidate,
+              "search:planned-query",
+              mcpCallDebugEntries,
+            );
+            const currentTexts = currentResponse.map((chunk) => SlackMcpAdapter.extractResultText(chunk));
+            for (const text of currentTexts) {
+              for (const mention of SlackMcpAdapter.extractMentionedUserIds(text)) {
+                mentionIds.add(mention);
+              }
+              if (SlackMcpAdapter.threadHydrationEnabled) {
+                for (const ref of SlackMcpAdapter.parseThreadRefs(text)) {
+                  pendingThreadRefs.set(`${ref.channelId}:${ref.threadTs}`, ref);
+                }
+              }
+            }
+            const currentExtracted = currentTexts
+              .map((text) =>
+                SlackMcpAdapter.buildConversationFromText(
+                  "Slack search",
+                  text,
+                  3,
+                  request.subject.displayName,
+                  userId,
+                ),
+              )
+              .filter((item): item is ConversationCandidate => Boolean(item));
+            selectedQuery = queryCandidate;
+            response = currentResponse;
+            parsedTexts = currentTexts;
+            extracted = currentExtracted;
+            if (currentExtracted.length > 0 || !currentTexts.every((text) => SlackMcpAdapter.containsNoResults(text))) {
+              break;
+            }
           }
+          conversationCandidates.push(...extracted);
+          searchDebugEntries.push({
+            mode: "planned-query",
+            query: selectedQuery,
+            timeframeSlice: SlackMcpAdapter.formatSliceLabel(slice),
+            attemptedQueries: candidateQueries,
+            chunks: response,
+            parsedTextCount: parsedTexts.length,
+            noResults: parsedTexts.every((text) => SlackMcpAdapter.containsNoResults(text)),
+            extractedConversations: extracted.length,
+          });
         }
-        conversationCandidates.push(...extracted);
-        searchDebugEntries.push({
-          mode: "planned-query",
-          query: selectedQuery,
-          attemptedQueries: candidateQueries,
-          chunks: response,
-          parsedTextCount: parsedTexts.length,
-          noResults: parsedTexts.every((text) => SlackMcpAdapter.containsNoResults(text)),
-          extractedConversations: extracted.length,
-        });
       }
 
       // Stage 2: DM/private probes to include direct conversations.
       const dmProbeQueries = [
         userId ? `<@${userId}> in:dm` : undefined,
         userId ? `from:<@${userId}>` : undefined,
+        request.subject.email ? `"${request.subject.email}" in:dm` : undefined,
         `"${request.subject.displayName}" in:dm`,
       ]
-        .filter((value): value is string => Boolean(value))
-        .map((query) => SlackMcpAdapter.formatDateScopedQuery(query, timeframeRange));
+        .filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
+      this.logRuntime(`search:planned total=${request.queries.length * effectiveSlices.length} windows=${effectiveSlices.length}`);
+      this.logRuntime(`search:dm-probe total=${dmProbeQueries.length * effectiveSlices.length}`);
 
-      for (const query of dmProbeQueries) {
-        const response = await this.callSearchWithFallbackArgs(searchTool, request, user, query);
-        const parsedTexts = response.map((chunk) => SlackMcpAdapter.extractResultText(chunk));
-        const extracted = parsedTexts
-          .map((text) =>
-            SlackMcpAdapter.buildConversationFromText(
-              "Slack DM/private search",
-              text,
-              4,
-              request.subject.displayName,
-              userId,
-            ),
-          )
-          .filter((item): item is ConversationCandidate => Boolean(item));
-        conversationCandidates.push(...extracted);
-        searchDebugEntries.push({
-          mode: "dm-probe",
-          query,
-          chunks: response,
-          parsedTextCount: parsedTexts.length,
-          noResults: parsedTexts.every((text) => SlackMcpAdapter.containsNoResults(text)),
-          extractedConversations: extracted.length,
-        });
+      for (const slice of effectiveSlices) {
+        for (const query of dmProbeQueries) {
+          const scopedQuery = SlackMcpAdapter.formatDateScopedQuery(query, slice);
+          const response = await this.callSearchWithFallbackArgs(
+            searchTool,
+            request,
+            queryUser,
+            scopedQuery,
+            "search:dm-probe",
+            mcpCallDebugEntries,
+          );
+          const parsedTexts = response.map((chunk) => SlackMcpAdapter.extractResultText(chunk));
+          for (const text of parsedTexts) {
+            for (const mention of SlackMcpAdapter.extractMentionedUserIds(text)) {
+              mentionIds.add(mention);
+            }
+            if (SlackMcpAdapter.threadHydrationEnabled) {
+              for (const ref of SlackMcpAdapter.parseThreadRefs(text)) {
+                pendingThreadRefs.set(`${ref.channelId}:${ref.threadTs}`, ref);
+              }
+            }
+          }
+          const extracted = parsedTexts
+            .map((text) =>
+              SlackMcpAdapter.buildConversationFromText(
+                "Slack DM/private search",
+                text,
+                4,
+                request.subject.displayName,
+                userId,
+              ),
+            )
+            .filter((item): item is ConversationCandidate => Boolean(item));
+          conversationCandidates.push(...extracted);
+          searchDebugEntries.push({
+            mode: "dm-probe",
+            query: scopedQuery,
+            timeframeSlice: SlackMcpAdapter.formatSliceLabel(slice),
+            chunks: response,
+            parsedTextCount: parsedTexts.length,
+            noResults: parsedTexts.every((text) => SlackMcpAdapter.containsNoResults(text)),
+            extractedConversations: extracted.length,
+          });
+        }
       }
+
+      // Stage 2b: priority channel probes (planning/scoring hints only).
+      for (const slice of effectiveSlices) {
+        const priorityQueries = SlackMcpAdapter.buildPriorityQueries(
+          request.subject.displayName,
+          this.priorityChannels,
+          slice,
+        );
+        for (const query of priorityQueries) {
+          const response = await this.callSearchWithFallbackArgs(
+            searchTool,
+            request,
+            queryUser,
+            query,
+            "search:priority-probe",
+            mcpCallDebugEntries,
+          );
+          const parsedTexts = response.map((chunk) => SlackMcpAdapter.extractResultText(chunk));
+          for (const text of parsedTexts) {
+            for (const mention of SlackMcpAdapter.extractMentionedUserIds(text)) {
+              mentionIds.add(mention);
+            }
+            if (SlackMcpAdapter.threadHydrationEnabled) {
+              for (const ref of SlackMcpAdapter.parseThreadRefs(text)) {
+                pendingThreadRefs.set(`${ref.channelId}:${ref.threadTs}`, ref);
+              }
+            }
+          }
+          const extracted = parsedTexts
+            .map((text) =>
+              SlackMcpAdapter.buildConversationFromText(
+                "Slack priority-channel search",
+                text,
+                5,
+                request.subject.displayName,
+                userId,
+              ),
+            )
+            .filter((item): item is ConversationCandidate => Boolean(item));
+          conversationCandidates.push(...extracted);
+          searchDebugEntries.push({
+            mode: "priority-probe",
+            query,
+            timeframeSlice: SlackMcpAdapter.formatSliceLabel(slice),
+            chunks: response,
+            parsedTextCount: parsedTexts.length,
+            noResults: parsedTexts.every((text) => SlackMcpAdapter.containsNoResults(text)),
+            extractedConversations: extracted.length,
+          });
+        }
+      }
+      this.logRuntime(`search:priority-probe total=${this.priorityChannels.length * effectiveSlices.length} channels=${this.priorityChannels.length}`);
 
       // Stage 3: discover channels and read only channels that mention the subject.
       try {
-        const channelDiscoveryResponse = await this.callToolWithFallbackArgs("slack_search_channels", [{ query: "" }, {}]);
+        const channelDiscoveryResponse = await this.callToolWithFallbackArgs(
+          "slack_search_channels",
+          [{ query: "" }, {}],
+          "channels:discover",
+          mcpCallDebugEntries,
+        );
         const parsedChannelTexts = channelDiscoveryResponse.map((chunk) => SlackMcpAdapter.extractResultText(chunk));
         discoveredChannels = [
           ...new Map(
@@ -830,16 +1337,78 @@ export class SlackMcpAdapter implements ICommProvider {
       } catch {
         discoveredChannels = [];
       }
+      this.logRuntime(`channels:discover found=${discoveredChannels.length} scanLimit=${SlackMcpAdapter.maxChannelScans}`);
+
+      const priorityChannelSet = new Set(this.priorityChannels.map((channel) => SlackMcpAdapter.normalizeChannelKey(channel)));
+      discoveredChannels = [...discoveredChannels].sort((left, right) => {
+        const leftPriority = priorityChannelSet.has(SlackMcpAdapter.normalizeChannelKey(left.name)) ? 1 : 0;
+        const rightPriority = priorityChannelSet.has(SlackMcpAdapter.normalizeChannelKey(right.name)) ? 1 : 0;
+        if (leftPriority !== rightPriority) {
+          return rightPriority - leftPriority;
+        }
+        return left.name.localeCompare(right.name);
+      });
+
+      if (SlackMcpAdapter.threadHydrationEnabled) {
+        for (const threadRef of pendingThreadRefs.values()) {
+          if (threadsRead >= SlackMcpAdapter.maxChannelThreadReads) {
+            break;
+          }
+          try {
+            const threadResponse = await this.callToolWithFallbackArgs(
+              "slack_read_thread",
+              [
+                { channel_id: threadRef.channelId, thread_ts: threadRef.threadTs },
+                { channel: threadRef.channelId, thread_ts: threadRef.threadTs },
+              ],
+              "threads:from-search",
+              mcpCallDebugEntries,
+            );
+            const threadText = threadResponse.map((chunk) => SlackMcpAdapter.extractResultText(chunk)).join("\n\n");
+            for (const mention of SlackMcpAdapter.extractMentionedUserIds(threadText)) {
+              mentionIds.add(mention);
+            }
+            const threadConversation = SlackMcpAdapter.buildConversationFromText(
+              "Thread from search hit",
+              threadText,
+              6,
+              request.subject.displayName,
+              userId,
+            );
+            if (threadConversation) {
+              conversationCandidates.push(threadConversation);
+            }
+            threadsRead += 1;
+          } catch {
+            // Thread read may not be available in every channel context.
+          }
+        }
+      }
+      this.logRuntime(`threads:from-search attempted=${pendingThreadRefs.size} read=${threadsRead} limit=${SlackMcpAdapter.maxChannelThreadReads}`);
 
       for (const channel of discoveredChannels.slice(0, SlackMcpAdapter.maxChannelScans)) {
         scannedChannels += 1;
-        const readResponse = await this.callToolWithFallbackArgs("slack_read_channel", [
-          { channel_id: channel.channelId },
-          { channel: channel.channelId },
-        ]);
+        const readResponse = await this.callToolWithFallbackArgs(
+          "slack_read_channel",
+          [
+            { channel_id: channel.channelId },
+            { channel: channel.channelId },
+          ],
+          "channels:read",
+          mcpCallDebugEntries,
+        );
         const texts = readResponse.map((chunk) => SlackMcpAdapter.extractResultText(chunk));
         const joined = texts.join("\n\n");
-        const relevanceScore = SlackMcpAdapter.scoreTextRelevance(joined, request.subject.displayName, userId);
+        for (const mention of SlackMcpAdapter.extractMentionedUserIds(joined)) {
+          mentionIds.add(mention);
+        }
+        if (SlackMcpAdapter.threadHydrationEnabled) {
+          for (const ref of SlackMcpAdapter.parseThreadRefs(joined)) {
+            pendingThreadRefs.set(`${ref.channelId}:${ref.threadTs}`, ref);
+          }
+        }
+        const priorityBoost = priorityChannelSet.has(SlackMcpAdapter.normalizeChannelKey(channel.name)) ? 2 : 0;
+        const relevanceScore = SlackMcpAdapter.scoreTextRelevance(joined, request.subject.displayName, userId) + priorityBoost;
         const hadNoMessages = SlackMcpAdapter.isEffectivelyEmptyChannelText(joined);
         const extracted: ConversationCandidate[] = [];
         if (relevanceScore > 0 && !hadNoMessages) {
@@ -855,30 +1424,37 @@ export class SlackMcpAdapter implements ICommProvider {
             conversationCandidates.push(channelConversation);
           }
 
-          const threadRefs = SlackMcpAdapter.parseThreadRefs(joined).slice(0, SlackMcpAdapter.maxChannelThreadReads - threadsRead);
-          for (const threadRef of threadRefs) {
-            if (threadsRead >= SlackMcpAdapter.maxChannelThreadReads) {
-              break;
-            }
-            try {
-              const threadResponse = await this.callToolWithFallbackArgs("slack_read_thread", [
-                { channel_id: threadRef.channelId, thread_ts: threadRef.threadTs },
-                { channel: threadRef.channelId, thread_ts: threadRef.threadTs },
-              ]);
-              const threadText = threadResponse.map((chunk) => SlackMcpAdapter.extractResultText(chunk)).join("\n\n");
-              const threadConversation = SlackMcpAdapter.buildConversationFromText(
-                `Thread in ${channel.name}`,
-                threadText,
-                6,
-                request.subject.displayName,
-                userId,
-              );
-              if (threadConversation) {
-                conversationCandidates.push(threadConversation);
+          if (SlackMcpAdapter.threadHydrationEnabled) {
+            const threadRefs = SlackMcpAdapter.parseThreadRefs(joined).slice(0, SlackMcpAdapter.maxChannelThreadReads - threadsRead);
+            for (const threadRef of threadRefs) {
+              if (threadsRead >= SlackMcpAdapter.maxChannelThreadReads) {
+                break;
               }
-              threadsRead += 1;
-            } catch {
-              // Thread read may not be supported on all returned URLs/contexts; continue.
+              try {
+                const threadResponse = await this.callToolWithFallbackArgs(
+                  "slack_read_thread",
+                  [
+                    { channel_id: threadRef.channelId, thread_ts: threadRef.threadTs },
+                    { channel: threadRef.channelId, thread_ts: threadRef.threadTs },
+                  ],
+                  "threads:from-channel-read",
+                  mcpCallDebugEntries,
+                );
+                const threadText = threadResponse.map((chunk) => SlackMcpAdapter.extractResultText(chunk)).join("\n\n");
+                const threadConversation = SlackMcpAdapter.buildConversationFromText(
+                  `Thread in ${channel.name}`,
+                  threadText,
+                  6,
+                  request.subject.displayName,
+                  userId,
+                );
+                if (threadConversation) {
+                  conversationCandidates.push(threadConversation);
+                }
+                threadsRead += 1;
+              } catch {
+                // Thread read may not be supported on all returned URLs/contexts; continue.
+              }
             }
           }
         }
@@ -891,6 +1467,7 @@ export class SlackMcpAdapter implements ICommProvider {
           hadNoMessages,
         });
       }
+      this.logRuntime(`channels:read scanned=${scannedChannels} threadsRead=${threadsRead}`);
 
       const deduped = new Map<string, ConversationCandidate>();
       for (const item of conversationCandidates) {
@@ -907,15 +1484,36 @@ export class SlackMcpAdapter implements ICommProvider {
       const selected = [...deduped.values()]
         .sort((a, b) => b.score - a.score)
         .slice(0, SlackMcpAdapter.maxFinalEvidence);
-      const normalizedConversations: NormalizedEvidence[] = selected.map((item, index) => ({
-        id: `comms-${index + 1}`,
-        source: "comms",
-        title: item.title,
-        summary: item.summary,
-        citation: `COMM-${index + 1}`,
-        url: item.url,
-        occurredAt: item.occurredAt,
-      }));
+      const mentionProfiles = await this.loadMentionProfiles(
+        [...mentionIds].filter((id) => id !== userId),
+        mcpCallDebugEntries,
+      );
+      const mentionProfileMap = new Map<string, MentionProfile>(mentionProfiles.map((profile) => [profile.userId, profile]));
+      const compactReactions = await this.loadOptionalReactions(selected, mcpCallDebugEntries);
+      const mcpFailedCalls = mcpCallDebugEntries.filter((entry) => !entry.ok);
+      const mcpSlowestCalls = [...mcpCallDebugEntries]
+        .sort((a, b) => b.durationMs - a.durationMs)
+        .slice(0, 20);
+      const normalizedConversations: NormalizedEvidence[] = selected.map((item, index) => {
+        const tags: string[] = [];
+        for (const mentionId of SlackMcpAdapter.extractMentionedUserIds(item.summary)) {
+          tags.push(`mention:${mentionId}`);
+          const mentionProfile = mentionProfileMap.get(mentionId);
+          if (mentionProfile?.title) {
+            tags.push(`title:${mentionProfile.title}`);
+          }
+        }
+        return {
+          id: `comms-${index + 1}`,
+          source: "comms",
+          title: item.title,
+          summary: item.summary,
+          citation: `COMM-${index + 1}`,
+          url: item.url,
+          occurredAt: item.occurredAt,
+          tags: tags.length > 0 ? [...new Set(tags)].slice(0, 8) : undefined,
+        };
+      });
 
       await this.writeDebugOutput({
         provider: this.name,
@@ -925,9 +1523,32 @@ export class SlackMcpAdapter implements ICommProvider {
         user,
         userId,
         profile: profileSnapshot,
+        subject: {
+          displayName: request.subject.displayName,
+          email: request.subject.email,
+          slackUserId: request.subject.slackUserId,
+        },
         timeframe: request.timeframe,
-        queryCount: request.queries.length + dmProbeQueries.length,
+        timeframeSlices: effectiveSlices.map((slice) => SlackMcpAdapter.formatSliceLabel(slice)).filter(Boolean),
+        queryCount: searchDebugEntries.length,
         rawChunkCount: searchDebugEntries.reduce((sum, entry) => sum + entry.chunks.length, 0),
+        priorityChannels: this.priorityChannels,
+        mentionsFound: mentionIds.size,
+        mentionProfiles,
+        reactionCollection: {
+          enabled: this.enableReactionReads,
+          maxMessages: this.maxReactionMessages,
+          reactionsFound: Object.keys(compactReactions).length,
+          reactions: compactReactions,
+        },
+        threadHydration: {
+          enabled: SlackMcpAdapter.threadHydrationEnabled,
+          maxThreadReads: SlackMcpAdapter.maxChannelThreadReads,
+          threadRefsDiscovered: pendingThreadRefs.size,
+        },
+        mcpCalls: mcpCallDebugEntries,
+        mcpCallFailures: mcpFailedCalls,
+        mcpSlowestCalls,
         channelsDiscovered: discoveredChannels.length,
         channelsScanned: scannedChannels,
         threadsRead,
@@ -937,6 +1558,9 @@ export class SlackMcpAdapter implements ICommProvider {
         channelReads: channelScanDebugEntries,
         normalizedConversations,
       });
+      this.logRuntime(
+        `done normalized=${normalizedConversations.length} mcpCalls=${mcpCallDebugEntries.length} failures=${mcpFailedCalls.length}`,
+      );
       return normalizedConversations;
     } catch (error) {
       let thrownError: unknown = error;
@@ -955,9 +1579,25 @@ export class SlackMcpAdapter implements ICommProvider {
         user,
         userId,
         profile: profileSnapshot,
+        subject: {
+          displayName: request.subject.displayName,
+          email: request.subject.email,
+          slackUserId: request.subject.slackUserId,
+        },
         timeframe: request.timeframe,
-        queryCount: request.queries.length,
+        timeframeSlices: effectiveSlices.map((slice) => SlackMcpAdapter.formatSliceLabel(slice)).filter(Boolean),
+        queryCount: searchDebugEntries.length,
         rawChunkCount: searchDebugEntries.reduce((sum, entry) => sum + entry.chunks.length, 0),
+        priorityChannels: this.priorityChannels,
+        mentionsFound: mentionIds.size,
+        threadHydration: {
+          enabled: SlackMcpAdapter.threadHydrationEnabled,
+          maxThreadReads: SlackMcpAdapter.maxChannelThreadReads,
+          threadRefsDiscovered: pendingThreadRefs.size,
+        },
+        mcpCalls: mcpCallDebugEntries,
+        mcpCallFailures: mcpCallDebugEntries.filter((entry) => !entry.ok),
+        mcpSlowestCalls: [...mcpCallDebugEntries].sort((a, b) => b.durationMs - a.durationMs).slice(0, 20),
         channelsDiscovered: discoveredChannels.length,
         channelsScanned: scannedChannels,
         threadsRead,
@@ -966,6 +1606,7 @@ export class SlackMcpAdapter implements ICommProvider {
         channelReads: channelScanDebugEntries,
         error: thrownError instanceof Error ? thrownError.message : String(thrownError),
       });
+      this.logRuntime(`failed error="${thrownError instanceof Error ? thrownError.message : String(thrownError)}" mcpCalls=${mcpCallDebugEntries.length}`);
       throw thrownError;
     }
   }

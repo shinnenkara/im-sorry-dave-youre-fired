@@ -4,6 +4,11 @@ timeframe: last_3_months
 subject:
   displayName: John Doe
   githubUsername: johndoe
+# Optional prioritization hint for planning/synthesis.
+# This is not a strict filter: broader evidence discovery still runs.
+# notableProjects: |
+#   Checkout reliability initiative
+#   VAT migration rollout
 reviewQuestions:
   - What were the major architectural contributions this quarter?
   - How effectively did this person collaborate with other teams?
@@ -85,5 +90,12 @@ providers:
   code:
     enabled: true
     type: github-cli
-    repo: acme/web-platform
-    prLimit: 100
+    # Optional org scope for GitHub search. When omitted, search is not org-limited.
+    org: acme
+    # Optional preferred repositories.
+    # These are ranking hints, not strict filters.
+    # Results from preferred repos are listed first.
+    repo:
+      - acme/web-platform
+      - acme/backend-api
+    prLimit: 500

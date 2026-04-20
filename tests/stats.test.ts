@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { computeEvidenceStats, renderStatsMarkdown } from "../src/stats/compute.js";
+import { computeEvidenceStats, renderStatsMarkdown, renderSynthesisBriefingMarkdown } from "../src/stats/compute.js";
 
 describe("computeEvidenceStats", () => {
   test("computes deterministic numeric metrics from evidence", () => {
@@ -99,6 +99,35 @@ describe("renderStatsMarkdown", () => {
     expect(markdown).toContain("# Performance Statistics — Jane Doe");
     expect(markdown).toContain("- Tasks completed: 5");
     expect(markdown).toContain("- Pull requests reviewed: 7");
+    expect(markdown).toContain("- Review events recorded: 12");
+  });
+});
+
+describe("renderSynthesisBriefingMarkdown", () => {
+  test("renders compact deterministic summary for synthesis input", () => {
+    const markdown = renderSynthesisBriefingMarkdown({
+      totals: {
+        tasksCompleted: 5,
+        mergedPrs: 4,
+        reviewedPrs: 7,
+        uniqueReposTouched: 3,
+        totalEvidenceItems: 16,
+      },
+      quality: {
+        bugLikeTasksResolved: 2,
+        highValueBugTasksResolved: 1,
+        bugFixPrsMerged: 2,
+        securityRelatedChanges: 1,
+      },
+      collaboration: {
+        reviewEvents: 12,
+        approvalsGiven: 6,
+      },
+    });
+
+    expect(markdown).toContain("## Deterministic evidence summary (trust these counts)");
+    expect(markdown).toContain("- Tasks completed: 5");
+    expect(markdown).toContain("- Pull requests merged: 4");
     expect(markdown).toContain("- Review events recorded: 12");
   });
 });

@@ -23,7 +23,18 @@ mcpServers:
     args: ["-y", "mcp-remote", "https://mcp.clickup.com/mcp"]
   slack:
     command: npx
-    args: ["-y", "mcp-remote", "https://mcp.slack.com/mcp"]
+    args:
+      - "-y"
+      - "mcp-remote"
+      - "https://mcp.slack.com/mcp"
+      - "3334"
+      - "--host"
+      - "localhost"
+      - "--static-oauth-client-info"
+      - '{"client_id":"${SLACK_CLIENT_ID}","client_secret":"${SLACK_CLIENT_SECRET}"}'
+    env:
+      SLACK_CLIENT_ID: ${SLACK_CLIENT_ID}
+      SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}
 
 providers:
   tasks:
@@ -67,5 +78,5 @@ providers:
     # repo can be single "owner/repo" or a list.
     repo: acme/web-platform
     # debugOutputPath: ./out/github_activity_john-doe_last-3-months.json
-    # Default: 100
-    prLimit: 100
+    # Default: 500
+    prLimit: 500

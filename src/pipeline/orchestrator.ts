@@ -317,6 +317,29 @@ function formatMarkdown(
   ].join("\n");
 }
 
+function renderQuestionStrategyGuidance(
+  questions: readonly string[],
+  strategies: readonly { questionIndex: number; evidenceStrategy: "aggregate" | "mixed" | "narrative" }[],
+): string {
+  if (strategies.length === 0) {
+    return "";
+  }
+
+  const lines = ["## Planner strategy hints", ""];
+  for (const strategy of strategies) {
+    const question = questions[strategy.questionIndex - 1];
+    if (!question) {
+      continue;
+    }
+    lines.push(`- Q${strategy.questionIndex}: ${strategy.evidenceStrategy} — ${question}`);
+  }
+  if (lines.length === 2) {
+    return "";
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
 async function collectWithProgress(
   onEvent: PipelineRunOptions["onEvent"],
   opts: {
@@ -395,6 +418,7 @@ export async function runReviewPipeline(options: PipelineRunOptions): Promise<Pi
     level: "info",
     message: `Planner generated queries (tasks=${queryPlan.providerQueries.tasks.length}, comms=${queryPlan.providerQueries.comms.length}, code=${queryPlan.providerQueries.code.length})`,
   });
+  const questionStrategyGuidance = renderQuestionStrategyGuidance(config.reviewQuestions, queryPlan.questionStrategies);
 
   emit(onEvent, { phase: "gathering", level: "info", message: "Collecting provider evidence in parallel" });
   const [tasks, comms, mergedPrs, reviews] = await Promise.all([
@@ -478,6 +502,7 @@ export async function runReviewPipeline(options: PipelineRunOptions): Promise<Pi
     level: "info",
     message: `Evidence totals: tasks=${tasks.length}, comms=${comms.length}, code=${code.length}`,
   });
+  const stats = computeEvidenceStats({ tasks, comms, code });
 
   if (dryRun) {
     emit(onEvent, { phase: "output", level: "info", message: "Dry run complete; skipped synthesis and file output" });
@@ -519,6 +544,7 @@ export async function runReviewPipeline(options: PipelineRunOptions): Promise<Pi
         config,
         modelId: models.pro,
         evidenceContext: trimmedContext,
+        questionStrategyMarkdown: questionStrategyGuidance,
       }),
   );
   emit(onEvent, { phase: "synthesis", level: "info", message: "Synthesis response received; drafting complete" });
@@ -530,7 +556,6 @@ export async function runReviewPipeline(options: PipelineRunOptions): Promise<Pi
   const outputPath = resolve(outDir, basename(`${outputPrefix}.md`));
   const allEvidence = [...tasks, ...comms, ...code];
   const referencesMarkdown = renderReferencesMarkdown(reviewMarkdownBody, allEvidence);
-  const stats = computeEvidenceStats({ tasks, comms, code });
   const statsBlockMarkdown = renderStatsBlockMarkdown(stats);
   const finalMarkdown = formatMarkdown(config, reviewMarkdownBody, {
     tasks: tasks.length,

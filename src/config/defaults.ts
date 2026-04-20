@@ -5,6 +5,11 @@ export const DEFAULT_REVIEW_MODELS: ReviewModelConfig = {
   pro: "gemini-2.5-pro",
 };
 
+export const CLAUDE_REVIEW_MODELS: ReviewModelConfig = {
+  fast: "claude-haiku-4-5",
+  pro: "claude-sonnet-4-6",
+};
+
 export const DEFAULT_REVIEW_CONFIG = {
   outDir: "out",
   maxContextChars: 120_000,

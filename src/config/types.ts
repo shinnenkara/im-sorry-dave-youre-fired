@@ -1,5 +1,7 @@
 export interface ReviewSubjectConfig {
   displayName: string;
+  email?: string;
+  slackUserId?: string;
   githubUsername?: string;
 }
 
@@ -44,6 +46,11 @@ export interface CommProviderConfig {
   expectedWorkspace?: string;
   expectedUserId?: string;
   expectedUserEmail?: string;
+  priorityChannels?: string | string[];
+  reactions?: {
+    enabled?: boolean;
+    maxMessages?: number;
+  };
   tools: {
     search: string;
   };
@@ -52,6 +59,7 @@ export interface CommProviderConfig {
 export interface CodeProviderConfig {
   enabled: boolean;
   type: "github-cli";
+  org?: string;
   repo?: string | string[];
   debugOutputPath?: string;
   prLimit: number;
@@ -82,6 +90,7 @@ export interface ReviewConfig {
   appName?: string;
   timeframe: ResolvedTimeframe;
   subject: ReviewSubjectConfig;
+  notableProjects?: string;
   reviewQuestions: string[];
   outDir: string;
   maxContextChars: number;

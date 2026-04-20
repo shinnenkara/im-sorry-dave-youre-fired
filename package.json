@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "tsx src/cli/bootstrap.ts",
     "clean:mcp-auth": "rm -rf ~/.mcp-auth",
+    "clean:slack": "tsx src/cli/cleanSlack.ts",
     "setup:slack": "tsx src/cli/setupSlack.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/cli/bootstrap.js",
@@ -28,6 +29,7 @@
   },
   "homepage": "https://github.com/shinnenkara/im-sorry-dave-youre-fired#readme",
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.71",
     "@ai-sdk/google": "^3.0.64",
     "@inquirer/prompts": "^8.4.2",
     "@modelcontextprotocol/sdk": "^1.29.0",

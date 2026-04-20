@@ -160,6 +160,25 @@ export function renderStatsBlockMarkdown(stats: ComputedStats): string {
   ].join("\n");
 }
 
+export function renderSynthesisBriefingMarkdown(stats: ComputedStats): string {
+  return [
+    "## Deterministic evidence summary (trust these counts)",
+    "",
+    `- Tasks completed: ${stats.totals.tasksCompleted}`,
+    `- Pull requests merged: ${stats.totals.mergedPrs}`,
+    `- Pull requests reviewed: ${stats.totals.reviewedPrs}`,
+    `- Total evidence items: ${stats.totals.totalEvidenceItems}`,
+    `- Unique repositories touched: ${stats.totals.uniqueReposTouched}`,
+    `- Bug-like tasks resolved: ${stats.quality.bugLikeTasksResolved}`,
+    `- High-value bug tasks resolved: ${stats.quality.highValueBugTasksResolved}`,
+    `- Bug-fix pull requests merged: ${stats.quality.bugFixPrsMerged}`,
+    `- Security-related changes: ${stats.quality.securityRelatedChanges}`,
+    `- Review events recorded: ${stats.collaboration.reviewEvents}`,
+    `- Approvals given: ${stats.collaboration.approvalsGiven}`,
+    "",
+  ].join("\n");
+}
+
 export function renderStatsMarkdown(config: ReviewConfig, stats: ComputedStats): string {
   return [
     `# Performance Statistics — ${config.subject.displayName}`,

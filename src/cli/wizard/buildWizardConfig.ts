@@ -1,14 +1,20 @@
-import { DEFAULT_REVIEW_MODELS } from "../../config/defaults.js";
+import { CLAUDE_REVIEW_MODELS, DEFAULT_REVIEW_MODELS } from "../../config/defaults.js";
 
 interface BuildWizardConfigInput {
   displayName: string;
   timeframe: "last_3_months" | "last_6_months" | "last_12_months";
+  notableProjectsText?: string;
   questionsText: string;
+  modelPreset: "gemini-default" | "claude-default";
   github?: {
     username: string;
-    repositories: string[];
+    org?: string;
+    repositories?: string[];
   };
   clickup?: {
+    email: string;
+  };
+  slack?: {
     email: string;
   };
 }
@@ -26,17 +32,22 @@ function parseQuestions(questionsText: string): string[] {
 
 export function buildWizardConfig(input: BuildWizardConfigInput): unknown {
   const providers: Record<string, unknown> = {};
+  const models = input.modelPreset === "claude-default" ? CLAUDE_REVIEW_MODELS : DEFAULT_REVIEW_MODELS;
+  const notableProjects = input.notableProjectsText?.trim();
   const subject: Record<string, string> = {
     displayName: input.displayName.trim(),
   };
 
   if (input.github) {
     subject.githubUsername = input.github.username.trim();
+    const org = input.github.org?.trim();
+    const repositories = input.github.repositories?.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
     providers.code = {
       enabled: true,
       type: "github-cli",
-      repo: input.github.repositories,
-      prLimit: 100,
+      ...(org ? { org } : {}),
+      ...(repositories && repositories.length > 0 ? { repo: repositories } : {}),
+      prLimit: 500,
     };
   }
 
@@ -52,13 +63,27 @@ export function buildWizardConfig(input: BuildWizardConfigInput): unknown {
     };
   }
 
+  if (input.slack) {
+    subject.email = input.slack.email.trim();
+    providers.comms = {
+      enabled: true,
+      type: "slack-mcp",
+      server: "slack",
+      expectedUserEmail: input.slack.email.trim(),
+      tools: {
+        search: "search_messages",
+      },
+    };
+  }
+
   return {
     timeframe: input.timeframe,
     subject,
+    ...(notableProjects ? { notableProjects } : {}),
     reviewQuestions: parseQuestions(input.questionsText),
     models: {
-      fast: DEFAULT_REVIEW_MODELS.fast,
-      pro: DEFAULT_REVIEW_MODELS.pro,
+      fast: models.fast,
+      pro: models.pro,
     },
     providers,
   };

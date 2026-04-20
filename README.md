@@ -19,7 +19,7 @@ Run the interactive wizard and it generates:
 
 Your data is yours. No third-party SaaS servers, no shady org-wide GitHub app installations, and no leaking your proprietary code to a random web form. All API keys and OAuth sessions are stored strictly locally.
 
-> _The Honest Disclaimer: Yes, the script does send your gathered data to your chosen AI model (Gemini/OpenAI) to write the review. But let's be real—you've been pasting your company's proprietary code into ChatGPT since 2022 to fix your regex, so that ship has already sailed. At least this time, it might get you a raise._
+> _The Honest Disclaimer: Yes, the script does send your gathered data to your chosen AI model (Gemini/Claude/OpenAI) to write the review. But let's be real—you've been pasting your company's proprietary code into ChatGPT since 2022 to fix your regex, so that ship has already sailed. At least this time, it might get you a raise._
 
 ## The "Holy Trinity" of Data Providers
 
@@ -74,7 +74,10 @@ npm start
 
 #### Setup required
 
-- Coming soon.
+- Set `ANTHROPIC_API_KEY` in your environment.
+- Interactive mode provides a Claude preset:
+  - fast planning: `claude-haiku-4-5-20251001`
+  - pro synthesis: `claude-sonnet-4-6`
 
 ### OpenAI
 
@@ -94,6 +97,8 @@ This project uses the official GitHub CLI to search PRs and commits.
 - Authenticate locally: `gh auth login`
 - For private repos, ensure token scopes include at least `repo` and `read:org`
 - Check current auth scopes: `gh auth status -t`
+- In config, `providers.code.org` optionally scopes searches to a company org (for example `acme`).
+- In config, `providers.code.repo` is optional and treated as a preferred list for ranking, not a strict filter.
 
 ### ClickUp (Tasks)
 
@@ -104,30 +109,106 @@ The ClickUp provider authenticates via OAuth in your browser.
 
 ### Slack (Comms - Beta)
 
-Then keep setup simple:
+Use official Slack CLI steps first, then run this repo's verifier.
 
-1. Install Slack CLI (manual step, same idea as GitHub CLI setup)
-2. Log in: `slack login`
-   - log into the Slack workspace you want this tool to read from
-   - Slack CLI will print a command/message to paste in Slack chat
-   - you can paste it into any chat, including a DM with yourself
-   - Slack will return a code; paste that code back into the CLI to complete login
-   - if install/login errors happen, use official documentation as a reference: [Slack agent quickstart](https://docs.slack.dev/ai/agent-quickstart)
-3. Run the setup assistant:
+1. Install Slack CLI and log in
+
+```bash
+slack login
+```
+
+2. From this repository root, create your Slack app from the in-repo template
+
+```bash
+slack create im-sorry-slack -t "$(pwd)/templates/im-sorry-slack-template"
+```
+
+3. Install/link the app in the generated project
+
+```bash
+cd im-sorry-slack
+slack app install --environment local
+```
+
+4. Open app settings (from `im-sorry-slack` directory):
+
+```bash
+slack app settings
+```
+
+If CLI cannot open the browser, use:
+
+- `https://api.slack.com/apps/<APP_ID>`
+- You can copy `<APP_ID>` from the `slack app install --environment local` output.
+
+5. In app settings, make sure:
+
+- OAuth Redirect URLs include `http://localhost:3334/oauth/callback`
+- Under **Agents & AI Apps**, **Model Context Protocol** is enabled
+  - direct page: `https://api.slack.com/apps/<APP_ID>/app-assistant`
+  - this MCP toggle is currently a Slack-side setting and is not automatically enabled by `slack app install`
+- You copy `client_id` and `client_secret` from **Basic Information** -> **App Credentials**
+
+6. Set local environment values in this repo's `.env`:
+
+```bash
+SLACK_CLIENT_ID=your_client_id
+SLACK_CLIENT_SECRET=your_client_secret
+```
+
+7. Run the verifier script (required):
 
 ```bash
 npm run setup:slack
 ```
 
-The setup assistant will:
+The verifier will:
 
 - verify Slack CLI is installed and your login is active
-- create a fixed Slack agent project on your machine (`im-sorry-slack`)
-- open Slack app setup (`slack app install --environment local`) when needed
-- save `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET` into your local `.env`
-- validate Slack MCP connectivity
+- trigger the Slack OAuth consent flow in your browser (this is where you connect the app to your workspace/user)
+- confirm Slack MCP connectivity with your configured app credentials
+- retry with guidance if MCP is not enabled yet for your app
+
+8. Naming and multi-user notes:
+
+- Multiple developers can use the same app name (`im-sorry-slack`) without collisions in practice, because each install is tracked by app ID/environment/workspace.
+- `--environment local` keeps this as a development install (`im-sorry-slack (local)`), separate from deployed/production environment.
+- If your workspace has many test apps with the same name, rely on `App ID` from install output and open settings with:
+  - `slack app settings`
+  - or `https://api.slack.com/apps/<APP_ID>`
 
 Note: Slack MCP is available on Slack Pro and higher plans. Access may also depend on workspace policy, and admin approval may be required.
+
+References:
+
+- [Slack MCP setup guide](https://docs.slack.dev/ai/slack-mcp-server/developing)
+- [Slack MCP sample app](https://github.com/slack-samples/bolt-js-slack-mcp-server)
+- [Slack scopes reference](https://docs.slack.dev/reference/scopes)
+- [Slack CLI docs](https://docs.slack.dev/tools/slack-cli/)
+
+#### Cleanup / Teardown (Slack MCP)
+
+When you need to reset local Slack MCP state:
+
+1. Remove cached MCP OAuth tokens
+
+```bash
+npm run clean:mcp-auth
+```
+
+2. Remove Slack credentials from this repo's `.env` (`SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`).
+3. Uninstall or delete the test app in Slack:
+   - Open [https://api.slack.com/apps](https://api.slack.com/apps)
+   - Select the app you created
+   - Use workspace uninstall/delete options, or equivalent Slack CLI commands (`slack app uninstall`, `slack app delete`)
+
+Optional helper:
+
+```bash
+npm run clean:slack
+```
+
+This helper runs local cleanup and prints a teardown checklist. It does not remove your Slack app from the workspace.
 
 ## Contributing
 

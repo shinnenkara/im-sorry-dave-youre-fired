@@ -1,6 +1,6 @@
 export type ProviderSlot = "code" | "tasks" | "comms";
 export type ProviderType = "github-cli" | "clickup-mcp" | "slack-mcp";
-export type ReadinessCheckId = "github-cli" | "clickup-mcp" | "slack-mcp" | "gemini";
+export type ReadinessCheckId = "github-cli" | "clickup-mcp" | "slack-mcp" | "gemini" | "anthropic";
 
 export interface ProviderOptionMeta {
   slot: ProviderSlot;
@@ -35,7 +35,8 @@ export const providerWizardMeta: ProviderOptionMeta[] = [
     evidenceLooksFor: [
       "Merged pull requests authored by the selected GitHub user",
       "Pull requests reviewed by the selected GitHub user",
-      "Repository-scoped results when repositories are configured",
+      "Organization-scoped results when a GitHub org is configured",
+      "Preferred repositories are ranked first when a repo list is configured",
     ],
     setupHelp: "Run `gh auth login` (and verify with `gh auth status`) before using GitHub provider.",
   },
@@ -58,9 +59,13 @@ export const providerWizardMeta: ProviderOptionMeta[] = [
     type: "slack-mcp",
     label: "Slack",
     readinessCheck: "slack-mcp",
-    description: "Slack provider is currently unavailable in the interactive setup.",
-    evidenceLooksFor: ["Not available yet in interactive setup."],
-    setupHelp: "Use YAML config for Slack today. Interactive support is coming soon.",
+    description: "Collects direct and channel communication evidence via Slack MCP.",
+    evidenceLooksFor: [
+      "Relevant direct messages for the selected user in the timeframe",
+      "Public/private channel discussions mentioning the selected user",
+      "Discussion context and collaboration signals related to review topics",
+    ],
+    setupHelp: "Provide the Slack email for the review subject when prompted.",
   },
 ];
 

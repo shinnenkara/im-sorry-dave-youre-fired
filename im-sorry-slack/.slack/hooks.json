@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "get-manifest": "node ./scripts/get-manifest.js"
+  },
+  "config": {
+    "watch": {
+      "manifest": {
+        "paths": ["manifest.json"]
+      }
+    }
+  }
+}
