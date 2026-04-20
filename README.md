@@ -91,8 +91,6 @@ This project uses the official GitHub CLI to search PRs and commits.
 - Authenticate locally: `gh auth login`
 - For private repos, ensure token scopes include at least `repo` and `read:org`
 - Check current auth scopes: `gh auth status -t`
-- In config, `providers.code.org` optionally scopes searches to a company org (for example `acme`).
-- In config, `providers.code.repo` is optional and treated as a preferred list for ranking, not a strict filter.
 
 ### ClickUp (Tasks)
 
