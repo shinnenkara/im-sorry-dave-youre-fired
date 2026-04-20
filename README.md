@@ -73,7 +73,7 @@ npm start
 
 - Set `ANTHROPIC_API_KEY` in your environment.
 - Interactive mode provides a Claude preset:
-  - fast planning: `claude-haiku-4-5-20251001`
+  - fast planning: `claude-haiku-4-5`
   - pro synthesis: `claude-sonnet-4-6`
 
 ### OpenAI
