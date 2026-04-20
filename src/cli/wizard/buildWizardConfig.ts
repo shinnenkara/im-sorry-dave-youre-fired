@@ -69,7 +69,6 @@ export function buildWizardConfig(input: BuildWizardConfigInput): unknown {
       enabled: true,
       type: "slack-mcp",
       server: "slack",
-      expectedUserEmail: input.slack.email.trim(),
       tools: {
         search: "search_messages",
       },

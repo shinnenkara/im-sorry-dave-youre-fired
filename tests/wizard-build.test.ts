@@ -139,7 +139,7 @@ describe("buildWizardConfig", () => {
 
     expect(config.subject.email).toBe("jane.doe@acme.com");
     expect(config.providers.comms?.type).toBe("slack-mcp");
-    expect(config.providers.comms?.expectedUserEmail).toBe("jane.doe@acme.com");
+    expect(config.providers.comms?.expectedUserEmail).toBeUndefined();
     expect(config.providers.comms?.tools.search).toBe("search_messages");
     expect(config.providers.tasks).toBeUndefined();
     expect(config.providers.code).toBeUndefined();

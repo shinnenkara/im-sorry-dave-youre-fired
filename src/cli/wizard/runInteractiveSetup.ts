@@ -313,7 +313,7 @@ export async function runInteractiveSetup(): Promise<ReviewConfig> {
         ? `- Preferred repositories: ${githubRepositories.join(", ")}`
         : undefined,
       clickupEmail ? `- ClickUp email: ${clickupEmail.trim()}` : undefined,
-      slackEmail ? `- Slack email: ${slackEmail.trim()}` : undefined,
+      slackEmail ? `- Slack subject email: ${slackEmail.trim()}` : undefined,
       "",
     ]
       .filter((line): line is string => Boolean(line))
