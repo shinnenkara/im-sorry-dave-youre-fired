@@ -103,6 +103,8 @@ The ClickUp provider authenticates via OAuth in your browser.
 
 ### Slack (Comms - Beta)
 
+Note: Slack MCP is available on Slack Pro and higher plans. Access may also depend on workspace policy, and admin approval may be required.
+
 Use official Slack CLI steps first, then run this repo's verifier.
 
 1. Install Slack CLI and log in
@@ -170,8 +172,6 @@ The verifier will:
 - If your workspace has many test apps with the same name, rely on `App ID` from install output and open settings with:
   - `slack app settings`
   - or `https://api.slack.com/apps/<APP_ID>`
-
-Note: Slack MCP is available on Slack Pro and higher plans. Access may also depend on workspace policy, and admin approval may be required.
 
 References:
 
