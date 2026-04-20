@@ -26,11 +26,8 @@ Your data is yours. No third-party SaaS servers, no shady org-wide GitHub app in
 To write a bulletproof review, the AI gathers context from three pillars of enterprise life:
 
 - **Code (GitHub):** proves what you actually built and merged.
-> I'm not crazy, my commit history had me tested.
 - **Tasks (ClickUp):** proves what business value you delivered.
-> Did you get the memo about the new Jira workflow?
 - **Comms (Slack - Beta):** proves that you (or your automated AI agent) actually talk to your team.
-> We need to talk about the middle-out compression of your daily standup updates.
 
 ---
 
