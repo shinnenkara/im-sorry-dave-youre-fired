@@ -27,7 +27,7 @@ To write a bulletproof review, the AI gathers context from three pillars of ente
 
 - **Code (GitHub):** proves what you actually built and merged.
 - **Tasks (ClickUp):** proves what business value you delivered.
-- **Comms (Slack - Beta):** proves that you (or your automated AI agent) actually talk to your team.
+- **Comms (Slack - Beta):** proves that you actually talk to your team.
 
 ---
 
